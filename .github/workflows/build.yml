@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -40,8 +40,14 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
           VERSION_CODE: ${{ github.run_number }}
-          VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('1.0.{0}', github.run_number) }}
-        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+        run: |
+          # Version name: the tag (v1.0 -> 1.0), the release branch (release/v1.0 -> 1.0), else 1.0.<run>.
+          case "$GITHUB_REF" in
+            refs/tags/v*)        export VERSION_NAME="${GITHUB_REF_NAME#v}" ;;
+            refs/heads/release/*) n="${GITHUB_REF#refs/heads/release/}"; export VERSION_NAME="${n#v}" ;;
+            *)                   export VERSION_NAME="1.0.${GITHUB_RUN_NUMBER}" ;;
+          esac
+          ./gradlew --no-daemon testDebugUnitTest assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -55,10 +61,17 @@ jobs:
           name: screenshots
           path: app/screenshots/
 
-      - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Publish a GitHub Release when a v* tag is pushed, or when a release/v* branch is pushed
+      # (then this step creates the tag). If the release already exists, the APK is replaced.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk "SEXY-${GITHUB_REF_NAME}.apk"
-          gh release create "$GITHUB_REF_NAME" "SEXY-${GITHUB_REF_NAME}.apk" --generate-notes
+          case "$GITHUB_REF" in
+            refs/tags/*) TAG="$GITHUB_REF_NAME" ;;
+            *)           TAG="${GITHUB_REF#refs/heads/release/}" ;;
+          esac
+          cp app/build/outputs/apk/release/app-release.apk "SEXY-${TAG}.apk"
+          gh release create "$TAG" "SEXY-${TAG}.apk" --target "$GITHUB_SHA" --title "SEXY $TAG" --generate-notes \
+            || gh release upload "$TAG" "SEXY-${TAG}.apk" --clobber
