@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Sexy" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/splash_bg</item>
+    </style>
+    <color name="splash_bg">#FF15121A</color>
+    <color name="icon_bg">#FF15121A</color>
+    <color name="icon_fg">#FFFF3D7F</color>
+</resources>

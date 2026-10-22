@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chat bubble with a spark: "your AI at home". 108dp adaptive-icon canvas, art inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/icon_fg"
+        android:pathData="M32,32 H76 A8,8 0 0 1 84,40 V64 A8,8 0 0 1 76,72 H50 L38,82 V72 H32 A8,8 0 0 1 24,64 V40 A8,8 0 0 1 32,32 Z" />
+    <path
+        android:fillColor="@color/icon_bg"
+        android:pathData="M54,39 C55.6,47.5 58.5,50.4 67,52 C58.5,53.6 55.6,56.5 54,65 C52.4,56.5 49.5,53.6 41,52 C49.5,50.4 52.4,47.5 54,39 Z" />
+</vector>
