@@ -28,6 +28,17 @@ class ServerUrlTest {
     @Test fun schemeWithoutPortKeepsDefaultSchemePort() {
         assertEquals("https://pc.tail1234.ts.net", ServerUrl.normalize("https://pc.tail1234.ts.net"))
     }
+    @Test fun bareNameTriesAllWaysTheServerCanBeShared() {
+        assertEquals(
+            listOf("http://desktop-d0efhda:3030", "https://desktop-d0efhda", "http://desktop-d0efhda"),
+            ServerUrl.candidates("desktop-d0efhda"),
+        )
+    }
+    @Test fun typedPortOrSchemeIsTakenLiterally() {
+        assertEquals(listOf("http://desktop-d0efhda:8080"), ServerUrl.candidates("desktop-d0efhda:8080"))
+        assertEquals(listOf("https://pc.tail1234.ts.net"), ServerUrl.candidates("https://pc.tail1234.ts.net"))
+        assertTrue(ServerUrl.candidates("").isEmpty())
+    }
     @Test fun rejectsGarbage() {
         assertNull(ServerUrl.normalize(""))
         assertNull(ServerUrl.normalize("http://"))

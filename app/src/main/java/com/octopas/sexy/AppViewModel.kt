@@ -15,6 +15,7 @@ import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
 sealed interface ServerStatus {
@@ -43,8 +44,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun client(): AiClient = AiClient(settings.serverUrl ?: "", settings.apiKey)
 
     fun connect(addressInput: String, keyInput: String) {
-        val url = ServerUrl.normalize(addressInput)
-        if (url == null) {
+        val candidates = ServerUrl.candidates(addressInput)
+        if (candidates.isEmpty()) {
             connectError = "That doesn't look like an address. Example: desktop-d0efhda:3030 or 100.101.102.103"
             return
         }
@@ -53,7 +54,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             connecting = true
             connectError = null
             try {
-                val models = AiClient(url, key.ifBlank { null }).listModels()
+                val (url, models) = probe(candidates, key.ifBlank { null })
                 settings.serverUrl = url
                 settings.apiKey = key
                 settings.modelId = models.firstOrNull() ?: "default"
@@ -61,12 +62,60 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 model = settings.modelId ?: ""
                 status = ServerStatus.Online
                 connected = true
+            } catch (e: ConnectAttemptsFailed) {
+                connectError = e.message
             } catch (e: Exception) {
                 connectError = friendlyError(e)
             } finally {
                 connecting = false
             }
         }
+    }
+
+    /**
+     * Tries each address until one answers like an AI server. Stops early when an address
+     * answers with an error (e.g. wrong key) or the name can't be found at all, because
+     * other ports won't change that.
+     */
+    private suspend fun probe(candidates: List<String>, key: String?): Pair<String, List<String>> {
+        val failures = mutableListOf<Pair<String, Throwable>>()
+        for (url in candidates) {
+            try {
+                return url to AiClient(url, key, probeHttp).listModels()
+            } catch (e: AiException) {
+                // Something answered at this address: its message is the real answer.
+                throw ConnectAttemptsFailed("${friendlyError(e)}\n(at $url)")
+            } catch (e: UnknownHostException) {
+                failures += url to e
+                break
+            } catch (e: Exception) {
+                failures += url to e
+            }
+        }
+        throw ConnectAttemptsFailed(describeFailures(failures))
+    }
+
+    private fun describeFailures(failures: List<Pair<String, Throwable>>): String {
+        val first = failures.first().second
+        val tried = failures.joinToString("\n") { (url, e) -> "• $url — ${e.javaClass.simpleName}" }
+        val hint = when {
+            failures.any { it.second is SSLException } ->
+                "\n\nIf the PC uses 'tailscale serve' (HTTPS), type the full name, e.g. https://desktop-d0efhda.<your-tailnet>.ts.net"
+            first is ConnectException ->
+                "\n\nThe PC was found but nothing is listening on those ports. Check that the server is running and is shared with 'tailscale serve' or listens on 0.0.0.0, not only 127.0.0.1."
+            else -> ""
+        }
+        return friendlyError(first) + "\n\nTried:\n" + tried + hint
+    }
+
+    private class ConnectAttemptsFailed(message: String) : Exception(message)
+
+    private companion object {
+        // Short connect timeout so trying several addresses doesn't take forever.
+        val probeHttp = AiClient.defaultHttp.newBuilder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
     }
 
     fun checkStatus() {
