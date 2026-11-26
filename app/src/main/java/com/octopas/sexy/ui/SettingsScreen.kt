@@ -53,15 +53,20 @@ fun SettingsScreen(app: AppViewModel, chat: ChatViewModel, github: GitHubViewMod
             Modifier.padding(pad).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Section("AI server") {
+            Section("Your PC (LM Studio)") {
                 Text(app.serverUrl, style = MaterialTheme.typography.bodyLarge)
                 StatusLine(app)
                 (app.status as? ServerStatus.Offline)?.let {
                     Text(it.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
+                Text(
+                    "SEXY finds your PC by itself whenever Tailscale is on. Tap the model name to switch models.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { app.checkStatus() }) { Text("Test connection") }
-                    OutlinedButton(onClick = { chat.stop(); app.disconnect() }) { Text("Change server") }
+                    OutlinedButton(onClick = { app.findServer() }) { Text("Search again") }
+                    OutlinedButton(onClick = { chat.stop(); app.disconnect() }) { Text("Use another PC") }
                 }
             }
 

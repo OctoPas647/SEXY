@@ -2,6 +2,8 @@ package com.octopas.sexy
 
 import com.octopas.sexy.data.AiClient
 import com.octopas.sexy.data.AiException
+import com.octopas.sexy.data.AiModel
+import com.octopas.sexy.data.ServerDiscovery
 import com.octopas.sexy.data.ChatMsg
 import com.octopas.sexy.data.FileEdit
 import com.octopas.sexy.data.GitHubClient
@@ -25,22 +27,41 @@ class AiClientTest {
     @Before fun start() = server.start()
     @After fun stop() = server.shutdown()
 
-    private fun client(key: String? = "secret") = AiClient(server.url("/").toString().trimEnd('/'), key)
+    private fun client(key: String? = "secret", clock: () -> Long = System::nanoTime) =
+        AiClient(server.url("/").toString().trimEnd('/'), key, clock = clock)
 
-    @Test fun listsModelsWithBearerKey() = runBlocking {
+    @Test fun llamaServerModelsWithBearerKey() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(404)) // no LM Studio API -> falls back to /v1/models
         server.enqueue(MockResponse().setBody("""{"object":"list","data":[{"id":"qwen3.6-35b","object":"model"}]}"""))
         assertEquals(listOf("qwen3.6-35b"), client().listModels())
+        assertEquals("/api/v0/models", server.takeRequest().path)
         val req = server.takeRequest()
         assertEquals("/v1/models", req.path)
         assertEquals("Bearer secret", req.getHeader("Authorization"))
     }
 
+    @Test fun lmStudioModelsLoadedFirstWithoutEmbeddings() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"object":"list","data":[
+                  {"id":"text-embedding-nomic-embed-text-v1.5","type":"embeddings","state":"not-loaded"},
+                  {"id":"qwen3.6-35b-a3b","type":"llm","state":"not-loaded"},
+                  {"id":"gpt-oss-20b","type":"llm","state":"loaded"}]}"""
+            )
+        )
+        assertEquals(listOf(AiModel("gpt-oss-20b", true), AiModel("qwen3.6-35b-a3b")), client(key = null).models())
+        val req = server.takeRequest()
+        assertEquals("/api/v0/models", req.path)
+        assertEquals(null, req.getHeader("Authorization"))
+    }
+
     @Test fun wrongKeyGivesFriendlyMessage() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"Invalid API Key"}}"""))
-        try { client("bad").listModels(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("Wrong API key")) }
+        try { client("bad").listModels(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("API key")) }
     }
 
     @Test fun serverDownBehindTailscaleServe() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(502))
         server.enqueue(MockResponse().setResponseCode(502))
         try { client().listModels(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("isn't running")) }
     }
@@ -70,6 +91,56 @@ class AiClientTest {
         assertTrue(body.contains("\"stream\":true"))
         assertTrue(body.contains("\"enable_thinking\":false"))
         assertTrue(body.contains("\"model\":\"qwen3.6-35b\""))
+    }
+
+    @Test fun lmStudioStreamGetsSpeedWorkedOutAndThinkTagsSplit() = runBlocking {
+        // LM Studio style: no "timings", thinking inline as <think> tags, usage at the end.
+        val sse = listOf(
+            """data: {"choices":[{"delta":{"content":"<think>hmm"}}]}""",
+            """data: {"choices":[{"delta":{"content":"</think>Hi"}}]}""",
+            """data: {"choices":[{"delta":{"content":"!"}}]}""",
+            """data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":20}}""",
+            "data: [DONE]",
+        ).joinToString("\n\n", postfix = "\n\n")
+        server.enqueue(MockResponse().setBody(sse))
+        var t = 0L
+        val fakeClock = { t.also { t += 500_000_000L } } // every reading is 0.5 s later
+        val events = client(clock = fakeClock).streamChat("m", listOf(ChatMsg("user", "hi")), thinking = true).toList()
+        assertEquals("hmm", events.filterIsInstance<StreamEvent.Reasoning>().joinToString("") { it.text })
+        assertEquals("Hi!", events.filterIsInstance<StreamEvent.Content>().joinToString("") { it.text })
+        val stats = events.last() as StreamEvent.Stats
+        assertEquals(20, stats.completionTokens)
+        assertEquals(40.0, stats.tokensPerSecond!!, 0.01) // 20 tokens in 0.5 s
+    }
+}
+
+class DiscoveryTest {
+    private val server = MockWebServer()
+
+    @Before fun start() {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = when (request.path) {
+                "/api/v0/models" -> MockResponse().setBody("""{"data":[{"id":"qwen3.6-35b-a3b","type":"llm","state":"loaded"}]}""")
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+    }
+    @After fun stop() = server.shutdown()
+
+    @Test fun findsThePcAmongDeadAddresses() = runBlocking {
+        val good = server.url("/").toString().trimEnd('/')
+        // Port 1 on localhost refuses connections straight away, like a PC without LM Studio running.
+        val r = ServerDiscovery.find(listOf("http://127.0.0.1:1", good, "http://127.0.0.1:2"), apiKey = null)
+        val found = (r as ServerDiscovery.Result.Success).found
+        assertEquals(good, found.url)
+        assertEquals(listOf(AiModel("qwen3.6-35b-a3b", loaded = true)), found.models)
+    }
+
+    @Test fun nothingAnswering() = runBlocking {
+        val r = ServerDiscovery.find(listOf("http://127.0.0.1:1", "http://127.0.0.1:2"), apiKey = null)
+        assertTrue(r is ServerDiscovery.Result.Failed)
+        assertEquals(null, (r as ServerDiscovery.Result.Failed).refused)
     }
 }
 

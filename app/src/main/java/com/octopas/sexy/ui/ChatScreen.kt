@@ -27,6 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AddComment
+import androidx.compose.material.icons.outlined.ArrowDropDown
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
@@ -34,6 +37,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -59,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -148,20 +154,69 @@ fun ChatScreen(app: AppViewModel, vm: ChatViewModel) {
     }
 }
 
+/** Connection dot + current model. Tap it to pick another model (like ChatGPT's model menu). */
 @Composable
 fun StatusLine(app: AppViewModel) {
+    val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
     val (color, text) = when (val s = app.status) {
-        ServerStatus.Checking -> MaterialTheme.colorScheme.outline to "connecting…"
-        ServerStatus.Online -> Color(0xFF22C55E) to app.model
+        ServerStatus.Checking -> MaterialTheme.colorScheme.outline to "looking for your PC…"
+        ServerStatus.Online -> Color(0xFF22C55E) to app.model.ifBlank { "pick a model" }
+        ServerStatus.NoTailscale -> MaterialTheme.colorScheme.error to "Tailscale is off · tap to open it"
         is ServerStatus.Offline -> MaterialTheme.colorScheme.error to "offline · tap to retry"
     }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.clickable { app.checkStatus() },
-    ) {
-        Box(Modifier.size(8.dp).background(color, CircleShape))
-        Spacer(Modifier.width(6.dp))
-        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable {
+                when (app.status) {
+                    ServerStatus.Online -> menu = true
+                    ServerStatus.NoTailscale -> if (!openTailscale(context)) app.findServer()
+                    else -> app.checkStatus()
+                }
+            },
+        ) {
+            Box(Modifier.size(8.dp).background(color, CircleShape))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (app.status == ServerStatus.Online) {
+                Icon(Icons.Outlined.ArrowDropDown, "Change model", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (app.models.isEmpty()) {
+                DropdownMenuItem(text = { Text("Refresh model list") }, onClick = { menu = false; app.checkStatus() })
+            }
+            app.models.forEach { m ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(m.id, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                if (m.loaded) "loaded · ready" else "loads when you send a message",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            if (m.id == app.model) Icons.Outlined.CheckCircle else Icons.Outlined.Circle,
+                            null,
+                            tint = if (m.id == app.model) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        )
+                    },
+                    onClick = { app.selectModel(m.id); menu = false },
+                )
+            }
+        }
     }
 }
 

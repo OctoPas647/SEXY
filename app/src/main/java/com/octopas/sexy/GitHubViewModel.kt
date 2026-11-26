@@ -206,7 +206,7 @@ class GitHubViewModel(app: Application) : AndroidViewModel(app) {
         val r = repo ?: return
         if (task.isBlank()) return
         if (selectedTokens > MAX_INPUT_TOKENS) {
-            error = "Too much code selected (~${selectedTokens / 1000}k tokens). Your server has a 64k context - keep it under ${MAX_INPUT_TOKENS / 1000}k."
+            error = "Too much code selected (~${selectedTokens / 1000}k tokens). LM Studio is set to a 32k context - keep it under ${MAX_INPUT_TOKENS / 1000}k, or raise the context length in LM Studio."
             return
         }
         error = null
@@ -257,7 +257,7 @@ class GitHubViewModel(app: Application) : AndroidViewModel(app) {
         val r = repo ?: return
         phase = "Thinking…"
         val ai = AiClient(settings.serverUrl ?: "", settings.apiKey)
-        ai.streamChat(settings.modelId ?: "default", conversation, thinking = true, maxTokens = 32_000).collect { ev ->
+        ai.streamChat(settings.modelId ?: "default", conversation, thinking = true, maxTokens = MAX_OUTPUT_TOKENS).collect { ev ->
             when (ev) {
                 is StreamEvent.Reasoning -> reasoning += ev.text
                 is StreamEvent.Content -> {
@@ -375,7 +375,9 @@ class GitHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        const val MAX_INPUT_TOKENS = 40_000
+        // LM Studio's context is 32k on this PC: input + the AI's answer (whole files) must fit in it.
+        const val MAX_INPUT_TOKENS = 16_000
+        const val MAX_OUTPUT_TOKENS = 14_000
 
         val BINARY_EXT = setOf(
             "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "svgz", "jar", "aar", "apk", "aab", "so", "dex", "class",

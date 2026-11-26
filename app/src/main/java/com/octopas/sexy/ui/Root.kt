@@ -22,6 +22,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.octopas.sexy.AppViewModel
 import com.octopas.sexy.ChatViewModel
@@ -36,6 +38,8 @@ enum class Tab(val label: String, val icon: ImageVector) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SexyRoot(app: AppViewModel = viewModel()) {
+    // Coming back to the app: make sure the PC is still there (or find it again).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { app.onResume() }
     if (!app.connected) {
         ConnectScreen(app)
         return
@@ -43,7 +47,7 @@ fun SexyRoot(app: AppViewModel = viewModel()) {
     val chat: ChatViewModel = viewModel()
     val github: GitHubViewModel = viewModel()
     var tab by rememberSaveable { mutableStateOf(Tab.Chat) }
-    LaunchedEffect(Unit) { app.checkStatus() }
+    LaunchedEffect(chat) { chat.onConnectionProblem = app::connectionLost }
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
