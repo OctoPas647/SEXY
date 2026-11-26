@@ -30,6 +30,11 @@ class AppSettings(context: Context) {
         get() = prefs.getString("system_prompt", "") ?: ""
         set(v) = prefs.edit().putString("system_prompt", v).apply()
 
+    /** Extra PC names / Tailscale IPs to look for, besides the built-in ones (comma separated). */
+    var extraHosts: List<String>
+        get() = prefs.getString("extra_hosts", "").orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        set(v) = prefs.edit().putString("extra_hosts", v.joinToString(",")).apply()
+
     var thinking: Boolean
         get() = prefs.getBoolean("thinking", true)
         set(v) = prefs.edit().putBoolean("thinking", v).apply()

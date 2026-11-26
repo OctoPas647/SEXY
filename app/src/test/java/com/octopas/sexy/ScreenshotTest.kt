@@ -41,16 +41,16 @@ class ScreenshotTest {
 
     private fun pretendConnected() {
         app.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
-            .putString("server_url", "http://desktop-d0efhda:3030")
+            .putString("server_url", "http://desktop-d0efhda:1234")
             .putString("model_id", "qwen3.6-35b")
             .commit()
     }
 
-    @Test fun connect() = shot("1-connect") { SexyRoot(AppViewModel(app)) }
+    @Test fun connect() = shot("1-connect") { SexyRoot(AppViewModel(app, autoSearch = false)) }
 
     @Test fun chatEmpty() {
         pretendConnected()
-        shot("2-chat-empty") { ChatScreen(AppViewModel(app), ChatViewModel(app)) }
+        shot("2-chat-empty") { ChatScreen(AppViewModel(app, autoSearch = false), ChatViewModel(app)) }
     }
 
     @Test fun chatConversation() {
@@ -73,7 +73,7 @@ prefs.edit().putBoolean("dark_mode", true).apply()
             reasoning = "The user wants to persist a simple setting. SharedPreferences is the easiest option for a beginner...",
             stats = "58.3 tok/s · 212 tokens",
         )
-        shot("3-chat") { ChatScreen(AppViewModel(app), chat) }
+        shot("3-chat") { ChatScreen(AppViewModel(app, autoSearch = false), chat) }
     }
 
     @Test fun githubToken() {
@@ -102,6 +102,6 @@ prefs.edit().putBoolean("dark_mode", true).apply()
 
     @Test fun settings() {
         pretendConnected()
-        shot("5-settings") { SettingsScreen(AppViewModel(app), ChatViewModel(app), GitHubViewModel(app), onOpenGitHub = {}) }
+        shot("5-settings") { SettingsScreen(AppViewModel(app, autoSearch = false), ChatViewModel(app), GitHubViewModel(app), onOpenGitHub = {}) }
     }
 }

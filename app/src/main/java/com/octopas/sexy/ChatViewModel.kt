@@ -56,6 +56,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     var thinking by mutableStateOf(settings.thinking)
         private set
 
+    /** Set by the UI: called when a message couldn't reach the PC, so the app looks for it again. */
+    var onConnectionProblem: (() -> Unit)? = null
+
     private var currentId = UUID.randomUUID().toString()
     private var job: Job? = null
 
@@ -92,6 +95,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     reply.stats = listOfNotNull(reply.stats, "stopped").joinToString(" · ")
                 } else {
                     reply.error = friendlyError(e)
+                    if (isConnectionProblem(e)) onConnectionProblem?.invoke()
                 }
             } finally {
                 reply.streaming = false

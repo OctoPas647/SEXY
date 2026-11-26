@@ -29,37 +29,60 @@ import java.util.concurrent.TimeUnit
 @Serializable
 data class ChatMsg(val role: String, val content: String)
 
+/** A chat model the server offers. [loaded] = already in memory on the PC (answers right away). */
+data class AiModel(val id: String, val loaded: Boolean = false)
+
 sealed interface StreamEvent {
     data class Content(val text: String) : StreamEvent
     data class Reasoning(val text: String) : StreamEvent
     data class Stats(val tokensPerSecond: Double?, val promptTokens: Int?, val completionTokens: Int?) : StreamEvent
 }
 
-class AiException(message: String) : Exception(message)
+class AiException(message: String, val code: Int = 0) : Exception(message)
 
 val appJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
 
-/** Talks to llama-server's OpenAI-compatible API (/v1/models, /v1/chat/completions). */
+/**
+ * Talks to an OpenAI-compatible server: LM Studio (port 1234) or llama-server.
+ * Uses /v1/models and /v1/chat/completions, plus LM Studio's /api/v0/models to see
+ * which models are chat models and which are already loaded.
+ */
 class AiClient(
     private val baseUrl: String,
     private val apiKey: String?,
     private val http: OkHttpClient = defaultHttp,
+    private val clock: () -> Long = System::nanoTime,
 ) {
     private fun request(path: String) = Request.Builder()
         .url(baseUrl.trimEnd('/') + path)
         .apply { if (!apiKey.isNullOrBlank()) header("Authorization", "Bearer $apiKey") }
 
-    suspend fun listModels(): List<String> = withContext(Dispatchers.IO) {
+    /** Model ids only (chat models, loaded ones first). */
+    suspend fun listModels(): List<String> = models().map { it.id }
+
+    suspend fun models(): List<AiModel> = withContext(Dispatchers.IO) {
+        lmStudioModels() ?: openAiModels()
+    }
+
+    /** LM Studio's richer list. Null when the server isn't LM Studio (404 etc.). */
+    private fun lmStudioModels(): List<AiModel>? =
+        http.newCall(request("/api/v0/models").get().build()).execute().use { r ->
+            val body = r.body?.string().orEmpty()
+            if (r.code == 401 || r.code == 403) throw AiException(errorText(r.code, body), r.code)
+            if (!r.isSuccessful) return null
+            val data = (runCatching { appJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
+                ?.get("data") as? JsonArray) ?: return null
+            ModelList.fromLmStudio(data)
+        }
+
+    private fun openAiModels(): List<AiModel> =
         http.newCall(request("/v1/models").get().build()).execute().use { r ->
             val body = r.body?.string().orEmpty()
-            if (!r.isSuccessful) throw AiException(errorText(r.code, body))
+            if (!r.isSuccessful) throw AiException(errorText(r.code, body), r.code)
             val root = runCatching { appJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
                 ?: throw AiException("That address answered, but it isn't an AI server.")
-            (root["data"] as? JsonArray).orEmpty().mapNotNull { m ->
-                ((m as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull
-            }
+            ModelList.fromOpenAi((root["data"] as? JsonArray) ?: JsonArray(emptyList()))
         }
-    }
 
     fun streamChat(
         model: String,
@@ -85,24 +108,58 @@ class AiClient(
         )
         // Stop button -> coroutine cancelled -> abort the HTTP stream (the server stops generating too).
         currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+
+        val think = ThinkTagSplitter()
+        var stats: StreamEvent.Stats? = null
+        var firstTokenAt: Long? = null
+        var chunks = 0
         call.execute().use { r ->
-            if (!r.isSuccessful) throw AiException(errorText(r.code, r.body?.string().orEmpty()))
+            if (!r.isSuccessful) throw AiException(errorText(r.code, r.body?.string().orEmpty()), r.code)
             val source = r.body?.source() ?: throw AiException("Empty response from server")
-            while (true) {
+            loop@ while (true) {
                 val line = source.readUtf8Line() ?: break
                 when (val res = SseParser.parse(line)) {
-                    SseParser.Result.Done -> return@use
+                    SseParser.Result.Done -> break@loop
                     SseParser.Result.Skip -> Unit
-                    is SseParser.Result.Events -> res.events.forEach { emit(it) }
+                    is SseParser.Result.Events -> for (ev in res.events) {
+                        when (ev) {
+                            is StreamEvent.Stats -> stats = merge(stats, ev)
+                            is StreamEvent.Reasoning, is StreamEvent.Content -> {
+                                if (firstTokenAt == null) firstTokenAt = clock()
+                                chunks++
+                                val split = if (ev is StreamEvent.Content) think.feed(ev.text) else listOf(ev)
+                                split.forEach { emit(it) }
+                            }
+                        }
+                    }
                 }
             }
         }
+        think.flush().forEach { emit(it) }
+        // LM Studio doesn't send a speed, so work it out from the time between the first and last token.
+        val elapsed = firstTokenAt?.let { (clock() - it) / 1e9 } ?: 0.0
+        val final = when {
+            stats?.tokensPerSecond != null -> stats
+            elapsed > 0.2 -> StreamEvent.Stats(
+                tokensPerSecond = (stats?.completionTokens ?: chunks) / elapsed,
+                promptTokens = stats?.promptTokens,
+                completionTokens = stats?.completionTokens,
+            )
+            else -> stats
+        }
+        final?.let { emit(it) }
     }.flowOn(Dispatchers.IO)
+
+    private fun merge(a: StreamEvent.Stats?, b: StreamEvent.Stats) = StreamEvent.Stats(
+        tokensPerSecond = b.tokensPerSecond ?: a?.tokensPerSecond,
+        promptTokens = b.promptTokens ?: a?.promptTokens,
+        completionTokens = b.completionTokens ?: a?.completionTokens,
+    )
 
     companion object {
         val defaultHttp: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.MINUTES) // big prompts can take a while before the first token
+            .readTimeout(10, TimeUnit.MINUTES) // loading a model / big prompts can take a while before the first token
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 
@@ -114,13 +171,83 @@ class AiClient(
                     ?: (err as? JsonPrimitive)?.contentOrNull
             }.getOrNull()
             return when (code) {
-                401 -> "Wrong API key. Copy it again from D:\\AI\\api-key.txt."
-                502, 504 -> "Your PC is reachable, but the AI server isn't running. Start '2-START AI SERVER.bat' on the PC."
+                401, 403 -> "The server wants an API key (or the key is wrong). In LM Studio: Developer → Server settings → API tokens."
+                502, 504 -> "Your PC is reachable, but LM Studio's server isn't running. Open LM Studio → Developer → Start server, or run D:\\AI\\tools\\SEXY-SERVER-SETUP.bat."
                 503 -> "The model is still loading on your PC. Try again in a few seconds."
-                404 -> "That address answered, but it isn't the AI server (404)."
+                404 -> serverMsg?.let { "Server: $it" } ?: "That address answered, but it isn't an AI server (404)."
                 else -> "Server error $code" + (serverMsg?.let { ": $it" } ?: body.take(200).let { if (it.isBlank()) "" else ": $it" })
             }
         }
+    }
+}
+
+/** Turns the servers' model lists into chat models, loaded ones first. Pure Kotlin so it's unit-tested. */
+object ModelList {
+    private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
+
+    private fun isChatId(id: String) = !id.contains("embed", ignoreCase = true)
+
+    fun fromLmStudio(data: JsonArray): List<AiModel> = data.mapNotNull { e ->
+        val o = e as? JsonObject ?: return@mapNotNull null
+        val id = o.str("id") ?: return@mapNotNull null
+        val type = o.str("type")
+        if (type != null && type != "llm" && type != "vlm") return@mapNotNull null
+        if (!isChatId(id)) return@mapNotNull null
+        AiModel(id, loaded = o.str("state") == "loaded")
+    }.sortedByDescending { it.loaded }
+
+    fun fromOpenAi(data: JsonArray): List<AiModel> = data.mapNotNull { e ->
+        val id = ((e as? JsonObject)?.str("id")) ?: return@mapNotNull null
+        if (isChatId(id)) AiModel(id) else null
+    }
+
+    /** Keep the user's pick if the server still has it, else a loaded model, else the first one. */
+    fun choose(models: List<AiModel>, previous: String?): String? =
+        models.firstOrNull { it.id == previous }?.id
+            ?: models.firstOrNull { it.loaded }?.id
+            ?: models.firstOrNull()?.id
+}
+
+/**
+ * Some servers put the model's thinking inside the answer as <think>...</think> instead of a
+ * separate field. This moves that part into Reasoning events, even when a tag is split across chunks.
+ */
+class ThinkTagSplitter {
+    private var inThink = false
+    private var pending = ""
+
+    fun feed(text: String): List<StreamEvent> {
+        val out = mutableListOf<StreamEvent>()
+        var s = pending + text
+        pending = ""
+        while (s.isNotEmpty()) {
+            val tag = if (inThink) "</think>" else "<think>"
+            val i = s.indexOf(tag)
+            if (i >= 0) {
+                emit(out, s.substring(0, i))
+                inThink = !inThink
+                s = s.substring(i + tag.length)
+                continue
+            }
+            // Hold back a possible partial tag at the end ("<thi") until the next chunk.
+            val keep = (1 until tag.length).lastOrNull { s.endsWith(tag.substring(0, it)) } ?: 0
+            emit(out, s.substring(0, s.length - keep))
+            pending = s.substring(s.length - keep)
+            break
+        }
+        return out
+    }
+
+    fun flush(): List<StreamEvent> {
+        val out = mutableListOf<StreamEvent>()
+        emit(out, pending)
+        pending = ""
+        return out
+    }
+
+    private fun emit(out: MutableList<StreamEvent>, t: String) {
+        if (t.isEmpty()) return
+        out += if (inThink) StreamEvent.Reasoning(t) else StreamEvent.Content(t)
     }
 }
 
@@ -149,7 +276,8 @@ object SseParser {
         val choice = (obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
         val delta = choice?.get("delta") as? JsonObject
         if (delta != null) {
-            (delta["reasoning_content"] as? JsonPrimitive)?.contentOrNull
+            // llama-server sends "reasoning_content"; LM Studio and others may send "reasoning".
+            ((delta["reasoning_content"] ?: delta["reasoning"]) as? JsonPrimitive)?.contentOrNull
                 ?.takeIf { it.isNotEmpty() }?.let { out += StreamEvent.Reasoning(it) }
             (delta["content"] as? JsonPrimitive)?.contentOrNull
                 ?.takeIf { it.isNotEmpty() }?.let { out += StreamEvent.Content(it) }
