@@ -48,7 +48,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.InsertDriveFile
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Refresh
@@ -196,7 +196,7 @@ fun ChatScreen(app: AppViewModel, chat: ChatViewModel, models: ModelsViewModel) 
                             items(chat.pending) { p ->
                                 Row(Modifier.glass(ContinuousCapsule).padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                     if (p.uploading) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    else Icon(if (p.attachment.isImage) Icons.Outlined.Image else Icons.Outlined.InsertDriveFile, null, Modifier.size(16.dp), tint = if (p.error != null) ios.orange else ios.accent)
+                                    else Icon(if (p.attachment.isImage) Icons.Outlined.Image else Icons.AutoMirrored.Outlined.InsertDriveFile, null, Modifier.size(16.dp), tint = if (p.error != null) ios.orange else ios.accent)
                                     Spacer(Modifier.size(6.dp))
                                     Text(p.attachment.name, style = IosType.footnote, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
                                     Icon(Icons.Outlined.Close, "Remove", Modifier.padding(start = 4.dp).size(18.dp).clickable { chat.removeAttachment(p) }, tint = ios.secondaryLabel)
