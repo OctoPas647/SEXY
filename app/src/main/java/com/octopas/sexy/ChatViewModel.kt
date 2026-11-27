@@ -95,7 +95,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshList(quiet: Boolean = false) {
         viewModelScope.launch {
             if (!quiet) listLoading = true
-            runCatching { repo.list() }.onSuccess { chats = it }
+            runCatching { repo.list() }.onSuccess { list ->
+                // PC unreachable and no phone copy: keep showing the chats we already had instead of an empty list.
+                val offline = repo.state.value == SyncState.PC_OFFLINE || repo.state.value == SyncState.NO_BRIDGE
+                if (!(offline && list.isEmpty() && chats.isNotEmpty())) chats = list
+            }
             listLoading = false
         }
     }
