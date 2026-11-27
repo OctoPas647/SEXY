@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
@@ -27,10 +28,55 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 @Serializable
-data class ChatMsg(val role: String, val content: String)
+data class ChatMsg(val role: String, val content: String, val images: List<String> = emptyList())
 
 /** A chat model the server offers. [loaded] = already in memory on the PC (answers right away). */
 data class AiModel(val id: String, val loaded: Boolean = false)
+
+/**
+ * The kinds of AI server SEXY recognises. Almost all of them speak the OpenAI API under /v1;
+ * Open WebUI is the exception (its API lives under /api). [ports] are the defaults the app searches.
+ */
+enum class ServerKind(val label: String, val chatPath: String, val ports: List<Int>) {
+    LM_STUDIO("LM Studio", "/v1/chat/completions", listOf(1234)),
+    OLLAMA("Ollama", "/v1/chat/completions", listOf(11434)),
+    LLAMA_CPP("llama.cpp", "/v1/chat/completions", listOf(8080)),
+    VLLM("vLLM", "/v1/chat/completions", listOf(8000)),
+    JAN("Jan", "/v1/chat/completions", listOf(1337)),
+    KOBOLDCPP("KoboldCpp", "/v1/chat/completions", listOf(5001)),
+    TEXT_GEN_WEBUI("text-generation-webui", "/v1/chat/completions", listOf(5000)),
+    GPT4ALL("GPT4All", "/v1/chat/completions", listOf(4891)),
+    LOCALAI("LocalAI", "/v1/chat/completions", emptyList()),
+    OPEN_WEBUI("Open WebUI", "/api/chat/completions", listOf(3000, 8080)),
+    OPENAI_COMPATIBLE("AI server", "/v1/chat/completions", emptyList());
+
+    companion object {
+        fun fromName(name: String?): ServerKind? = entries.firstOrNull { it.name == name }
+
+        /** Every default port, most popular first, without duplicates. */
+        val allPorts: List<Int> get() = entries.flatMap { it.ports }.distinct()
+
+        /** Guess the server from the "owned_by" field of /v1/models (each server fills it differently). */
+        fun fromOwner(owner: String?): ServerKind? {
+            val o = owner?.lowercase() ?: return null
+            return when {
+                "llamacpp" in o || "llama.cpp" in o || "llama-cpp" in o -> LLAMA_CPP
+                "vllm" in o -> VLLM
+                "ollama" in o || o == "library" -> OLLAMA
+                "koboldcpp" in o -> KOBOLDCPP
+                "localai" in o -> LOCALAI
+                "jan" == o || "jan" in o.split(' ', '-', '_') -> JAN
+                "gpt4all" in o -> GPT4ALL
+                "openwebui" in o || "open-webui" in o -> OPEN_WEBUI
+                "lmstudio" in o || "lm-studio" in o || "lm studio" in o -> LM_STUDIO
+                else -> null
+            }
+        }
+    }
+}
+
+/** What answered at an address, and the chat models it has. */
+data class ServerInfo(val kind: ServerKind, val models: List<AiModel>)
 
 sealed interface StreamEvent {
     data class Content(val text: String) : StreamEvent
@@ -43,15 +89,17 @@ class AiException(message: String, val code: Int = 0) : Exception(message)
 val appJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
 
 /**
- * Talks to an OpenAI-compatible server: LM Studio (port 1234) or llama-server.
- * Uses /v1/models and /v1/chat/completions, plus LM Studio's /api/v0/models to see
- * which models are chat models and which are already loaded.
+ * Talks to whatever AI server runs on the PC: LM Studio, Ollama, llama.cpp, vLLM, Jan, KoboldCpp,
+ * text-generation-webui, GPT4All, LocalAI, Open WebUI or any other OpenAI-compatible server.
+ * [detect] works out which one it is by asking each server's own "list models" endpoint.
+ * [kind] = already known (saved from an earlier detect), so chat goes to the right path.
  */
 class AiClient(
     private val baseUrl: String,
     private val apiKey: String?,
     private val http: OkHttpClient = defaultHttp,
     private val clock: () -> Long = System::nanoTime,
+    private val kind: ServerKind? = null,
 ) {
     private fun request(path: String) = Request.Builder()
         .url(baseUrl.trimEnd('/') + path)
@@ -60,48 +108,120 @@ class AiClient(
     /** Model ids only (chat models, loaded ones first). */
     suspend fun listModels(): List<String> = models().map { it.id }
 
-    suspend fun models(): List<AiModel> = withContext(Dispatchers.IO) {
-        lmStudioModels() ?: openAiModels()
+    suspend fun models(): List<AiModel> = detect().models
+
+    /**
+     * Finds out which server this is and lists its chat models. Each server is asked in its own
+     * language, most specific first, so the richest information wins (e.g. which models are loaded).
+     * A refused connection or timeout is thrown straight away - nothing else will answer there either.
+     */
+    suspend fun detect(): ServerInfo = withContext(Dispatchers.IO) {
+        var refused: AiException? = null
+        var lastError: AiException? = null
+        val probes: List<() -> ServerInfo?> = listOf(::lmStudio, ::ollama, ::openAi, ::openWebUi, ::koboldLegacy)
+        for (probe in probes) {
+            try {
+                probe()?.let { return@withContext it }
+            } catch (e: AiException) {
+                // A proxy (tailscale serve) saying the server behind it is down: every path will say the same.
+                if (e.code in 502..504) throw e
+                if (e.code == 401 || e.code == 403) { if (refused == null) refused = e } else lastError = e
+            }
+        }
+        throw refused ?: lastError ?: AiException("That address answered, but it isn't an AI server.")
     }
 
-    /** LM Studio's richer list. Null when the server isn't LM Studio (404 etc.). */
-    private fun lmStudioModels(): List<AiModel>? =
-        http.newCall(request("/api/v0/models").get().build()).execute().use { r ->
+    /** GET [path] as JSON. Null when the endpoint doesn't exist or doesn't return JSON (e.g. a web page). */
+    private fun getJson(path: String): JsonElement? =
+        http.newCall(request(path).get().build()).execute().use { r ->
             val body = r.body?.string().orEmpty()
             if (r.code == 401 || r.code == 403) throw AiException(errorText(r.code, body), r.code)
+            if (r.code == 502 || r.code == 503 || r.code == 504) throw AiException(errorText(r.code, body), r.code)
             if (!r.isSuccessful) return null
-            val data = (runCatching { appJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
-                ?.get("data") as? JsonArray) ?: return null
-            ModelList.fromLmStudio(data)
+            runCatching { appJson.parseToJsonElement(body) }.getOrNull()
         }
 
-    private fun openAiModels(): List<AiModel> =
-        http.newCall(request("/v1/models").get().build()).execute().use { r ->
-            val body = r.body?.string().orEmpty()
-            if (!r.isSuccessful) throw AiException(errorText(r.code, body), r.code)
-            val root = runCatching { appJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
-                ?: throw AiException("That address answered, but it isn't an AI server.")
-            ModelList.fromOpenAi((root["data"] as? JsonArray) ?: JsonArray(emptyList()))
-        }
+    /** LM Studio: /api/v0/models also says which models are loaded and which are embeddings. */
+    private fun lmStudio(): ServerInfo? {
+        val data = ((getJson("/api/v0/models") as? JsonObject)?.get("data") as? JsonArray) ?: return null
+        val looksLikeLmStudio = data.isEmpty() || data.any { (it as? JsonObject)?.containsKey("state") == true }
+        if (!looksLikeLmStudio) return null
+        return ServerInfo(ServerKind.LM_STUDIO, ModelList.fromLmStudio(data))
+    }
+
+    /** Ollama: /api/tags lists downloaded models, /api/ps the ones in memory. */
+    private fun ollama(): ServerInfo? {
+        val tags = ((getJson("/api/tags") as? JsonObject)?.get("models") as? JsonArray) ?: return null
+        // llama.cpp's server copies /api/tags too, but only Ollama answers /api/version.
+        val version = runCatching { (getJson("/api/version") as? JsonObject)?.get("version") }.getOrNull()
+        if (version == null) return null
+        val running = runCatching { ((getJson("/api/ps") as? JsonObject)?.get("models") as? JsonArray) }.getOrNull()
+        return ServerInfo(ServerKind.OLLAMA, ModelList.fromOllama(tags, running ?: JsonArray(emptyList())))
+    }
+
+    /** The OpenAI-style /v1/models that nearly every server has. "owned_by" tells them apart. */
+    private fun openAi(): ServerInfo? {
+        val root = getJson("/v1/models") ?: return null
+        val list = ModelList.openAiArray(root) ?: return null
+        val owner = list.firstNotNullOfOrNull { ((it as? JsonObject)?.get("owned_by") as? JsonPrimitive)?.contentOrNull }
+        val kind = ServerKind.fromOwner(owner)
+            ?: if ((root as? JsonObject)?.containsKey("models") == true) ServerKind.LLAMA_CPP else ServerKind.OPENAI_COMPATIBLE
+        return ServerInfo(kind, ModelList.fromOpenAi(list))
+    }
+
+    /** Open WebUI keeps its API under /api and needs an API key (Settings -> Account -> API keys). */
+    private fun openWebUi(): ServerInfo? {
+        val data = ((getJson("/api/models") as? JsonObject)?.get("data") as? JsonArray) ?: return null
+        return ServerInfo(ServerKind.OPEN_WEBUI, ModelList.fromOpenAi(data))
+    }
+
+    /** Older KoboldCpp builds without /v1: one model, named by /api/v1/model. */
+    private fun koboldLegacy(): ServerInfo? {
+        val name = ((getJson("/api/v1/model") as? JsonObject)?.get("result") as? JsonPrimitive)?.contentOrNull
+            ?: return null
+        return ServerInfo(ServerKind.KOBOLDCPP, listOf(AiModel(name, loaded = true)))
+    }
 
     fun streamChat(
         model: String,
         messages: List<ChatMsg>,
         thinking: Boolean,
         maxTokens: Int? = null,
+        sampling: Sampling? = null,
     ): Flow<StreamEvent> = flow {
         val payload = buildJsonObject {
             put("model", model)
             put("stream", true)
             putJsonArray("messages") {
-                messages.forEach { m -> addJsonObject { put("role", m.role); put("content", m.content) } }
+                messages.forEach { m ->
+                    addJsonObject {
+                        put("role", m.role)
+                        if (m.images.isEmpty()) put("content", m.content) else putJsonArray("content") {
+                            if (m.content.isNotBlank()) addJsonObject { put("type", "text"); put("text", m.content) }
+                            m.images.forEach { url -> addJsonObject { put("type", "image_url"); putJsonObject("image_url") { put("url", url) } } }
+                        }
+                    }
+                }
             }
-            putJsonObject("chat_template_kwargs") { put("enable_thinking", thinking) }
+            val reasoning = sampling?.reasoning ?: Reasoning.AUTO
+            val think = when (reasoning) {
+                Reasoning.OFF -> false
+                Reasoning.AUTO -> thinking
+                else -> true
+            }
+            putJsonObject("chat_template_kwargs") { put("enable_thinking", think) }
+            if (reasoning in listOf(Reasoning.LOW, Reasoning.MEDIUM, Reasoning.HIGH)) put("reasoning_effort", reasoning.api)
             putJsonObject("stream_options") { put("include_usage", true) }
-            if (maxTokens != null) put("max_tokens", maxTokens)
+            (sampling?.maxTokens ?: maxTokens)?.let { put("max_tokens", it) }
+            sampling?.temperature?.let { put("temperature", it) }
+            sampling?.topP?.let { put("top_p", it) }
+            sampling?.topK?.let { put("top_k", it) }
+            sampling?.minP?.let { put("min_p", it) }
+            sampling?.repeatPenalty?.let { put("repeat_penalty", it) }
+            sampling?.seed?.let { put("seed", it) }
         }
         val call = http.newCall(
-            request("/v1/chat/completions")
+            request((kind ?: ServerKind.OPENAI_COMPATIBLE).chatPath)
                 .header("Accept", "text/event-stream")
                 .post(payload.toString().toRequestBody("application/json".toMediaType()))
                 .build()
@@ -171,8 +291,8 @@ class AiClient(
                     ?: (err as? JsonPrimitive)?.contentOrNull
             }.getOrNull()
             return when (code) {
-                401, 403 -> "The server wants an API key (or the key is wrong). In LM Studio: Developer → Server settings → API tokens."
-                502, 504 -> "Your PC is reachable, but LM Studio's server isn't running. Open LM Studio → Developer → Start server, or run D:\\AI\\tools\\SEXY-SERVER-SETUP.bat."
+                401, 403 -> "The server wants an API key (or the key is wrong). LM Studio: Developer → Server settings → API tokens. Open WebUI: Settings → Account → API keys."
+                502, 504 -> "Your PC is reachable, but the AI server isn't running. For LM Studio: open it → Developer → Start server, or run D:\\AI\\LMStudio\\SEXY-LMSTUDIO.bat."
                 503 -> "The model is still loading on your PC. Try again in a few seconds."
                 404 -> serverMsg?.let { "Server: $it" } ?: "That address answered, but it isn't an AI server (404)."
                 else -> "Server error $code" + (serverMsg?.let { ": $it" } ?: body.take(200).let { if (it.isBlank()) "" else ": $it" })
@@ -197,8 +317,29 @@ object ModelList {
     }.sortedByDescending { it.loaded }
 
     fun fromOpenAi(data: JsonArray): List<AiModel> = data.mapNotNull { e ->
-        val id = ((e as? JsonObject)?.str("id")) ?: return@mapNotNull null
+        val o = e as? JsonObject
+        val id = o?.str("id") ?: o?.str("model") ?: o?.str("name") ?: (e as? JsonPrimitive)?.contentOrNull
+            ?: return@mapNotNull null
         if (isChatId(id)) AiModel(id) else null
+    }.distinctBy { it.id }
+
+    /** The model array of a /v1/models answer: {"data":[...]}, {"models":[...]} or a bare [...]. */
+    fun openAiArray(root: JsonElement): JsonArray? = when (root) {
+        is JsonArray -> root
+        is JsonObject -> (root["data"] as? JsonArray) ?: (root["models"] as? JsonArray)
+        else -> null
+    }
+
+    /** Ollama: downloaded models from /api/tags, marked loaded when /api/ps lists them. */
+    fun fromOllama(tags: JsonArray, running: JsonArray): List<AiModel> {
+        val loaded = running.mapNotNull { (it as? JsonObject)?.let { o -> o.str("name") ?: o.str("model") } }.toSet()
+        return tags.mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o.str("name") ?: o.str("model") ?: return@mapNotNull null
+            val family = (o["details"] as? JsonObject)?.str("family").orEmpty()
+            if (!isChatId(id) || family.contains("bert", ignoreCase = true)) return@mapNotNull null
+            AiModel(id, loaded = id in loaded)
+        }.sortedByDescending { it.loaded }
     }
 
     /** Keep the user's pick if the server still has it, else a loaded model, else the first one. */

@@ -13,3 +13,8 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# pdfbox-android (reading attached PDFs): optional JPEG2000 decoder isn't bundled.
+-dontwarn com.gemalto.jp2.**
+-keep class com.tom_roush.pdfbox.** { *; }
+-keep class com.tom_roush.fontbox.** { *; }

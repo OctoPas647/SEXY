@@ -256,7 +256,7 @@ class GitHubViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun kotlinx.coroutines.CoroutineScope.streamAndReview(client: GitHubClient) {
         val r = repo ?: return
         phase = "Thinking…"
-        val ai = AiClient(settings.serverUrl ?: "", settings.apiKey)
+        val ai = AiClient(settings.serverUrl ?: "", settings.apiKey, kind = settings.serverKind)
         ai.streamChat(settings.modelId ?: "default", conversation, thinking = true, maxTokens = MAX_OUTPUT_TOKENS).collect { ev ->
             when (ev) {
                 is StreamEvent.Reasoning -> reasoning += ev.text

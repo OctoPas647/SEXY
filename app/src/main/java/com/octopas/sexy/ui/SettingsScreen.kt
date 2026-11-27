@@ -1,138 +1,181 @@
 package com.octopas.sexy.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.octopas.sexy.AppViewModel
 import com.octopas.sexy.ChatViewModel
-import com.octopas.sexy.GitHubViewModel
+import com.octopas.sexy.ModelsViewModel
+import com.octopas.sexy.SexyApp
 import com.octopas.sexy.ServerStatus
+import com.octopas.sexy.data.SyncState
+import com.octopas.sexy.ui.theme.LocalIos
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(app: AppViewModel, chat: ChatViewModel, github: GitHubViewModel, onOpenGitHub: () -> Unit) {
+fun SettingsScreen(app: AppViewModel, chat: ChatViewModel, models: ModelsViewModel) {
+    val ios = LocalIos.current
     val context = LocalContext.current
-    var systemPrompt by remember { mutableStateOf(app.settings.systemPrompt) }
-    var confirmDelete by remember { mutableStateOf(false) }
+    val sexy = context.applicationContext as SexyApp
+    val settings = app.settings
+    val scope = rememberCoroutineScope()
+    val backdrop = rememberLayerBackdrop()
+    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val sync by chat.syncState.collectAsState()
+
+    var keepCopy by remember { mutableStateOf(settings.keepLocalCopy) }
+    var confirmCopyOff by remember { mutableStateOf(false) }
+    var systemPrompt by remember { mutableStateOf(settings.systemPrompt) }
+    var defaultSampling by remember { mutableStateOf(settings.defaultSampling) }
+    var defaultPlugins by remember { mutableStateOf(settings.defaultPlugins) }
+    var thinking by remember { mutableStateOf(settings.thinking) }
+    var bridgeUrl by remember { mutableStateOf(settings.bridgeUrl.orEmpty()) }
+    var note by remember { mutableStateOf<String?>(null) }
     val version = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
     }
+    LaunchedEffect(Unit) { app.checkBridge(); models.refreshPlugins() }
 
-    Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = { TopAppBar(title = { Text("Settings") }) }) { pad ->
-        Column(
-            Modifier.padding(pad).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    Box(Modifier.fillMaxSize().background(ios.groupedBackground)) {
+        LazyColumn(
+            Modifier.fillMaxSize().layerBackdrop(backdrop),
+            contentPadding = PaddingValues(top = top + 16.dp, bottom = LocalTabBarSpace.current + 24.dp),
         ) {
-            Section("Your PC (LM Studio)") {
-                Text(app.serverUrl, style = MaterialTheme.typography.bodyLarge)
-                StatusLine(app)
-                (app.status as? ServerStatus.Offline)?.let {
-                    Text(it.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-                Text(
-                    "SEXY finds your PC by itself whenever Tailscale is on. Tap the model name to switch models.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { app.findServer() }) { Text("Search again") }
-                    OutlinedButton(onClick = { chat.stop(); app.disconnect() }) { Text("Use another PC") }
+            item { LargeTitle("Settings") }
+            item {
+                IosSection("Your PC", footer = "SEXY finds your PC by itself whenever Tailscale is on — LM Studio, Ollama, llama.cpp, vLLM, Jan, KoboldCpp, text-generation-webui, GPT4All or Open WebUI.") {
+                    IosRow(
+                        app.serverKind?.label ?: "AI server",
+                        subtitle = app.serverUrl,
+                        icon = Icons.Outlined.Computer,
+                        iconColor = if (app.status == ServerStatus.Online) ios.green else ios.red,
+                        value = when (app.status) {
+                            ServerStatus.Online -> "Online"
+                            ServerStatus.Checking -> "Checking…"
+                            ServerStatus.NoTailscale -> "Tailscale off"
+                            is ServerStatus.Offline -> "Offline"
+                        },
+                    )
+                    IosRow(
+                        "Chat bridge",
+                        subtitle = if (app.bridgeOnline) "Chats, uploads and the terminal work." else "Not running — run SEXY-LMSTUDIO.bat in D:\\AI\\LMStudio once.",
+                        icon = Icons.Outlined.Link, iconColor = if (app.bridgeOnline) ios.green else ios.orange,
+                        value = if (app.bridgeOnline) "Connected" else "Offline",
+                        onClick = { app.checkBridge() },
+                    )
+                    IosRow("Search again", icon = Icons.Outlined.Search, onClick = { app.findServer() })
+                    IosRow("Use another PC", icon = Icons.Outlined.SwapHoriz, iconColor = ios.secondaryLabel, divider = false, onClick = { chat.stop(); app.disconnect() })
                 }
             }
-
-            Section("Chat") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Think before answering")
-                        Text(
-                            "Smarter answers, but slower. You can also toggle it next to the message box.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            item {
+                IosSection(
+                    "Chats",
+                    footer = "Chats are stored on your PC in LM Studio's own chat folder, so you see the same chats here and in LM Studio. " +
+                        "With the copy on, you can also read them when the PC is off; new chats are sent to the PC when it's back.",
+                ) {
+                    IosToggleRow(
+                        "Keep a copy on this phone", keepCopy,
+                        { on ->
+                            if (on) { keepCopy = true; settings.keepLocalCopy = true; scope.launch { note = "Copied ${sexy.chats.downloadAll()} chats to this phone." } }
+                            else confirmCopyOff = true
+                        },
+                        icon = Icons.Outlined.PhoneAndroid, iconColor = ios.accent,
+                    )
+                    IosRow(
+                        "Sync now",
+                        subtitle = when (sync) {
+                            SyncState.SYNCED -> "Everything is on your PC."
+                            SyncState.PENDING, SyncState.SYNCING -> "${sexy.chats.pendingCount} chat(s) waiting for the PC."
+                            SyncState.PC_OFFLINE -> "Your PC can't be reached."
+                            SyncState.NO_BRIDGE -> "The bridge isn't running on the PC."
+                        },
+                        icon = Icons.Outlined.CloudSync, iconColor = ios.green, divider = keepCopy,
+                        onClick = { chat.syncNow(); note = "Syncing with your PC…" },
+                    )
+                    if (keepCopy) IosRow("Download all chats to this phone", icon = Icons.Outlined.Download, divider = false, onClick = {
+                        scope.launch { note = "Copied ${sexy.chats.downloadAll()} chats to this phone." }
+                    })
+                }
+                note?.let { Text(it, style = SmallText, color = ios.secondaryLabel, modifier = Modifier.padding(horizontal = 32.dp)) }
+            }
+            item {
+                IosSection("New chats", footer = "Each chat can change these in its ⋯ menu.") {
+                    IosTextRow(systemPrompt, { systemPrompt = it; settings.systemPrompt = it }, "System prompt for new chats", singleLine = false, minLines = 2)
+                    IosToggleRow("Think before answering", thinking, { thinking = it; settings.thinking = it; chat.updateThinking(it) }, icon = Icons.Outlined.Psychology, iconColor = ios.purple, divider = false)
+                }
+            }
+            if (models.plugins.isNotEmpty()) item {
+                IosSection("Plugins for new chats", footer = "LM Studio plugins and MCP servers from your PC. They run on the PC.") {
+                    models.plugins.forEachIndexed { i, p ->
+                        IosToggleRow(
+                            p.name, p.id in defaultPlugins,
+                            { on -> defaultPlugins = if (on) defaultPlugins + p.id else defaultPlugins - p.id; settings.defaultPlugins = defaultPlugins },
+                            subtitle = p.id, icon = Icons.Outlined.Extension, iconColor = ios.purple, divider = i < models.plugins.lastIndex,
                         )
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(checked = chat.thinking, onCheckedChange = chat::updateThinking)
-                }
-                OutlinedTextField(
-                    value = systemPrompt,
-                    onValueChange = { systemPrompt = it; app.settings.systemPrompt = it },
-                    label = { Text("Custom instructions (optional)") },
-                    placeholder = { Text("e.g. Answer briefly. I'm building Android apps in Kotlin.") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TextButton(onClick = { confirmDelete = true }) { Text("Delete all chats") }
-            }
-
-            Section("GitHub") {
-                if (github.login != null) {
-                    Text("Signed in as @${github.login}")
-                    OutlinedButton(onClick = { github.signOut() }) { Text("Sign out / change token") }
-                } else {
-                    Text("Not connected", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedButton(onClick = onOpenGitHub) { Text("Connect GitHub") }
                 }
             }
-
-            Section("About") {
-                Text("SEXY $version")
-                Text(
-                    "Talks only to your own AI server and to GitHub. Your API key and GitHub token are encrypted with the phone's keystore.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            item { SamplingSection(defaultSampling, "Default sampling") { defaultSampling = it; settings.defaultSampling = it } }
+            item {
+                IosSection("Advanced", footer = "Leave empty to use port 1235 on the same PC as the AI server.") {
+                    IosTextRow(bridgeUrl, { bridgeUrl = it; settings.bridgeUrl = it.trim().ifBlank { null } }, "Bridge address (automatic)", divider = false)
+                }
             }
-            Spacer(Modifier.height(16.dp))
+            item {
+                IosSection("About", footer = "Liquid Glass by Kyant0/AndroidLiquidGlass (Apache 2.0). Inter font by Rasmus Andersson (SIL OFL). PDF reading by PdfBox-Android (Apache 2.0).") {
+                    IosRow("SEXY", value = version, icon = Icons.Outlined.Info, iconColor = ios.secondaryLabel, divider = false)
+                }
+            }
         }
     }
 
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete all chats?") },
-            text = { Text("This can't be undone.") },
-            confirmButton = { TextButton(onClick = { chat.deleteAll(); confirmDelete = false }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
-        )
-    }
-}
-
-@Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            content()
-        }
-    }
+    if (confirmCopyOff) AlertDialog(
+        onDismissRequest = { confirmCopyOff = false },
+        title = { Text("Remove the copy from this phone?") },
+        text = {
+            Text(
+                if (sexy.chats.pendingCount > 0) "${sexy.chats.pendingCount} chat(s) haven't reached your PC yet and would be lost. Sync first."
+                else "Your chats stay on your PC. This phone will only show them while it can reach the PC.",
+            )
+        },
+        confirmButton = {
+            TextButton({
+                keepCopy = false; settings.keepLocalCopy = false; sexy.chats.deleteLocalCopy(); confirmCopyOff = false; chat.refreshList()
+            }, enabled = sexy.chats.pendingCount == 0) { Text("Remove", color = ios.red) }
+        },
+        dismissButton = { TextButton({ confirmCopyOff = false }) { Text("Keep") } },
+    )
 }
