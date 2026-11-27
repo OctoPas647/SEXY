@@ -64,6 +64,21 @@ class AiClientTest {
         assertEquals(null, server.takeRequest().getHeader("Authorization"))
     }
 
+    @Test fun lmStudio04WithOnlyTheV1Api() = runBlocking {
+        serve(
+            mapOf(
+                "/api/v1/models" to """{"models":[
+                  {"type":"llm","key":"qwen/qwen3.6-35b-a3b","display_name":"Qwen3.6 35B A3B","size_bytes":1,"loaded_instances":[{"id":"qwen/qwen3.6-35b-a3b","config":{"context_length":8192}}]},
+                  {"type":"llm","key":"google/gemma-4-12b","display_name":"Gemma 4 12B","size_bytes":1,"loaded_instances":[]},
+                  {"type":"embedding","key":"text-embedding-nomic","display_name":"Nomic","size_bytes":1,"loaded_instances":[]}]}""",
+                "/v1/models" to """{"data":[{"id":"qwen/qwen3.6-35b-a3b","owned_by":"organization_owner"}]}""",
+            )
+        )
+        val info = client(key = null).detect()
+        assertEquals(ServerKind.LM_STUDIO, info.kind)
+        assertEquals(listOf(AiModel("qwen/qwen3.6-35b-a3b", true), AiModel("google/gemma-4-12b")), info.models)
+    }
+
     @Test fun ollamaWithLoadedModel() = runBlocking {
         serve(
             mapOf(

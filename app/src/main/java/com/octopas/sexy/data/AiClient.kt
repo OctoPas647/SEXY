@@ -118,7 +118,7 @@ class AiClient(
     suspend fun detect(): ServerInfo = withContext(Dispatchers.IO) {
         var refused: AiException? = null
         var lastError: AiException? = null
-        val probes: List<() -> ServerInfo?> = listOf(::lmStudio, ::ollama, ::openAi, ::openWebUi, ::koboldLegacy)
+        val probes: List<() -> ServerInfo?> = listOf(::lmStudioV1, ::lmStudio, ::ollama, ::openAi, ::openWebUi, ::koboldLegacy)
         for (probe in probes) {
             try {
                 probe()?.let { return@withContext it }
@@ -141,7 +141,17 @@ class AiClient(
             runCatching { appJson.parseToJsonElement(body) }.getOrNull()
         }
 
-    /** LM Studio: /api/v0/models also says which models are loaded and which are embeddings. */
+    /** LM Studio 0.4+: /api/v1/models lists every model with its loaded instances. */
+    private fun lmStudioV1(): ServerInfo? {
+        val root = getJson("/api/v1/models") as? JsonObject ?: return null
+        val arr = root["models"] as? JsonArray ?: return null
+        val isLmStudio = arr.isEmpty() || arr.any { (it as? JsonObject)?.let { o -> "key" in o && "loaded_instances" in o } == true }
+        if (!isLmStudio) return null
+        val models = LmStudioApi.parseModels(root).filter { it.isChat }.map { AiModel(it.key, it.isLoaded) }.sortedByDescending { it.loaded }
+        return ServerInfo(ServerKind.LM_STUDIO, models)
+    }
+
+    /** Older LM Studio: /api/v0/models also says which models are loaded and which are embeddings. */
     private fun lmStudio(): ServerInfo? {
         val data = ((getJson("/api/v0/models") as? JsonObject)?.get("data") as? JsonArray) ?: return null
         val looksLikeLmStudio = data.isEmpty() || data.any { (it as? JsonObject)?.containsKey("state") == true }
