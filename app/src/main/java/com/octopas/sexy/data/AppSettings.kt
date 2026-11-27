@@ -44,6 +44,57 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("thinking", true)
         set(v) = prefs.edit().putBoolean("thinking", v).apply()
 
+    /** Keep a copy of the chats on the phone too (off = chats are only on the PC). */
+    var keepLocalCopy: Boolean
+        get() = prefs.getBoolean("keep_local_copy", false)
+        set(v) = prefs.edit().putBoolean("keep_local_copy", v).apply()
+
+    /** Bridge address if it isn't on the AI server's PC at port 1235 (null = automatic). */
+    var bridgeUrl: String?
+        get() = prefs.getString("bridge_url", null)?.takeIf { it.isNotBlank() }
+        set(v) = prefs.edit().putString("bridge_url", v).apply()
+
+    /** Sampling used for every chat unless the chat has its own. */
+    var defaultSampling: Sampling
+        get() = prefs.getString("default_sampling", null)
+            ?.let { runCatching { appJson.decodeFromString(Sampling.serializer(), it) }.getOrNull() } ?: Sampling()
+        set(v) = prefs.edit().putString("default_sampling", appJson.encodeToString(Sampling.serializer(), v)).apply()
+
+    /** A chat's own sampling settings (the chat file itself stays exactly as LM Studio writes it). */
+    fun chatSampling(chatId: String): Sampling =
+        prefs.getString("sampling_$chatId", null)
+            ?.let { runCatching { appJson.decodeFromString(Sampling.serializer(), it) }.getOrNull() } ?: Sampling()
+
+    fun setChatSampling(chatId: String, s: Sampling) {
+        prefs.edit().putString("sampling_$chatId", appJson.encodeToString(Sampling.serializer(), s)).apply()
+    }
+
+    /** Load settings chosen on the phone for each model (context length, Flash Attention, ...). */
+    fun loadConfig(modelKey: String): LoadConfig? =
+        prefs.getString("load_$modelKey", null)?.let { runCatching { appJson.decodeFromString(LoadConfig.serializer(), it) }.getOrNull() }
+
+    fun setLoadConfig(modelKey: String, cfg: LoadConfig) {
+        prefs.edit().putString("load_$modelKey", appJson.encodeToString(LoadConfig.serializer(), cfg)).apply()
+    }
+
+    /** Plugins switched on for new chats (LM Studio plugin ids, e.g. danielsig/duckduckgo). */
+    var defaultPlugins: List<String>
+        get() = prefs.getString("default_plugins", "").orEmpty().split(',').filter { it.isNotBlank() }
+        set(v) = prefs.edit().putString("default_plugins", v.joinToString(",")).apply()
+
+    /** Unload other models before loading one (so two big models don't fight over the GPU). */
+    var unloadOthersOnLoad: Boolean
+        get() = prefs.getBoolean("unload_others", true)
+        set(v) = prefs.edit().putBoolean("unload_others", v).apply()
+
+    var terminalCwd: String
+        get() = prefs.getString("terminal_cwd", "") ?: ""
+        set(v) = prefs.edit().putString("terminal_cwd", v).apply()
+
+    var terminalHistory: List<String>
+        get() = prefs.getString("terminal_history", "").orEmpty().split('\u0001').filter { it.isNotBlank() }
+        set(v) = prefs.edit().putString("terminal_history", v.takeLast(100).joinToString("\u0001")).apply()
+
     fun disconnectServer() {
         serverUrl = null
         serverKind = null

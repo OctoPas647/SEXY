@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.octopas.sexy.data.AiClient
 import com.octopas.sexy.data.AiException
 import com.octopas.sexy.data.AiModel
+import com.octopas.sexy.data.BridgeClient
 import com.octopas.sexy.data.GitHubException
 import com.octopas.sexy.data.ModelList
 import com.octopas.sexy.data.ServerDiscovery
@@ -64,6 +65,14 @@ class AppViewModel @JvmOverloads constructor(
     var status by mutableStateOf<ServerStatus>(ServerStatus.Checking)
         private set
     val tailscaleOn: Boolean get() = sexy.tailscale.on.value
+    /** The PC bridge (chats in LM Studio's folder, uploads, terminal) answers. */
+    var bridgeOnline by mutableStateOf(false)
+        private set
+
+    fun checkBridge() {
+        val url = settings.bridgeUrl ?: BridgeClient.urlFor(settings.serverUrl) ?: return
+        viewModelScope.launch { bridgeOnline = BridgeClient(url).health() }
+    }
 
     private var search: Job? = null
     private var lastOnlineAt = 0L
@@ -158,6 +167,7 @@ class AppViewModel @JvmOverloads constructor(
             ServerStatus.Offline("${kind.label} is running but has no chat models. Download one in ${kind.label}.")
         } else ServerStatus.Online
         lastOnlineAt = System.currentTimeMillis()
+        checkBridge()
         connected = true
         connectError = null
     }

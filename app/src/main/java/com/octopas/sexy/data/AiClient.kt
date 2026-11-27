@@ -28,7 +28,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 @Serializable
-data class ChatMsg(val role: String, val content: String)
+data class ChatMsg(val role: String, val content: String, val images: List<String> = emptyList())
 
 /** A chat model the server offers. [loaded] = already in memory on the PC (answers right away). */
 data class AiModel(val id: String, val loaded: Boolean = false)
@@ -187,16 +187,38 @@ class AiClient(
         messages: List<ChatMsg>,
         thinking: Boolean,
         maxTokens: Int? = null,
+        sampling: Sampling? = null,
     ): Flow<StreamEvent> = flow {
         val payload = buildJsonObject {
             put("model", model)
             put("stream", true)
             putJsonArray("messages") {
-                messages.forEach { m -> addJsonObject { put("role", m.role); put("content", m.content) } }
+                messages.forEach { m ->
+                    addJsonObject {
+                        put("role", m.role)
+                        if (m.images.isEmpty()) put("content", m.content) else putJsonArray("content") {
+                            if (m.content.isNotBlank()) addJsonObject { put("type", "text"); put("text", m.content) }
+                            m.images.forEach { url -> addJsonObject { put("type", "image_url"); putJsonObject("image_url") { put("url", url) } } }
+                        }
+                    }
+                }
             }
-            putJsonObject("chat_template_kwargs") { put("enable_thinking", thinking) }
+            val reasoning = sampling?.reasoning ?: Reasoning.AUTO
+            val think = when (reasoning) {
+                Reasoning.OFF -> false
+                Reasoning.AUTO -> thinking
+                else -> true
+            }
+            putJsonObject("chat_template_kwargs") { put("enable_thinking", think) }
+            if (reasoning in listOf(Reasoning.LOW, Reasoning.MEDIUM, Reasoning.HIGH)) put("reasoning_effort", reasoning.api)
             putJsonObject("stream_options") { put("include_usage", true) }
-            if (maxTokens != null) put("max_tokens", maxTokens)
+            (sampling?.maxTokens ?: maxTokens)?.let { put("max_tokens", it) }
+            sampling?.temperature?.let { put("temperature", it) }
+            sampling?.topP?.let { put("top_p", it) }
+            sampling?.topK?.let { put("top_k", it) }
+            sampling?.minP?.let { put("min_p", it) }
+            sampling?.repeatPenalty?.let { put("repeat_penalty", it) }
+            sampling?.seed?.let { put("seed", it) }
         }
         val call = http.newCall(
             request((kind ?: ServerKind.OPENAI_COMPATIBLE).chatPath)
