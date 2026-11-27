@@ -86,6 +86,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
 
+    // Liquid Glass (Kyant0/AndroidLiquidGlass): real backdrop blur + lens refraction, Apple-style continuous corners.
+    implementation("io.github.kyant0:backdrop:1.0.1")
+    implementation("io.github.kyant0:capsule:2.1.1")
+
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

@@ -123,7 +123,7 @@ fun ConnectScreen(vm: AppViewModel) {
                             Spacer(Modifier.height(14.dp))
                             Text("Looking for your PC…", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "Checking LM Studio on your Tailscale network",
+                                "Checking LM Studio, Ollama, llama.cpp and more on your Tailscale network",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -180,7 +180,7 @@ fun ConnectScreen(vm: AppViewModel) {
                         label = { Text("PC address") },
                         placeholder = { Text("desktop-d0efhda or 100.x.x.x") },
                         leadingIcon = { Icon(Icons.Outlined.Dns, null) },
-                        supportingText = { Text("Tailscale name or IP. LM Studio's port 1234 is used unless you type another.") },
+                        supportingText = { Text("Tailscale name or IP. Popular AI servers' ports are tried unless you type one.") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                     )
@@ -196,7 +196,7 @@ fun ConnectScreen(vm: AppViewModel) {
                                 Icon(if (showKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, "Show key")
                             }
                         },
-                        supportingText = { Text("Only if you turned on API tokens in LM Studio") },
+                        supportingText = { Text("Only if your server needs one (LM Studio API tokens, Open WebUI API key)") },
                         singleLine = true,
                         visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
@@ -214,7 +214,7 @@ fun ConnectScreen(vm: AppViewModel) {
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "On the PC: LM Studio with its server running (D:\\AI\\tools\\SEXY-SERVER-SETUP.bat sets it up).",
+                    "On the PC: any AI server - LM Studio (D:\\AI\\LMStudio\\SEXY-LMSTUDIO.bat sets it up), Ollama, llama.cpp, vLLM, Jan, KoboldCpp, Open WebUI...",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,

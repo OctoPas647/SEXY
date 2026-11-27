@@ -53,14 +53,14 @@ fun SettingsScreen(app: AppViewModel, chat: ChatViewModel, github: GitHubViewMod
             Modifier.padding(pad).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Section("Your PC (LM Studio)") {
+            Section("Your PC" + (app.serverKind?.let { " (${it.label})" } ?: "")) {
                 Text(app.serverUrl, style = MaterialTheme.typography.bodyLarge)
                 StatusLine(app)
                 (app.status as? ServerStatus.Offline)?.let {
                     Text(it.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 Text(
-                    "SEXY finds your PC by itself whenever Tailscale is on. Tap the model name to switch models.",
+                    "SEXY finds your PC by itself whenever Tailscale is on, whichever AI app it runs: LM Studio, Ollama, llama.cpp, vLLM, Jan, KoboldCpp, text-generation-webui, GPT4All or Open WebUI. Tap the model name to switch models.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

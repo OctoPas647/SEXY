@@ -79,7 +79,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val reply = UiMessage("assistant").apply { streaming = true }
         messages += reply
         busy = true
-        val client = AiClient(settings.serverUrl ?: "", settings.apiKey)
+        val client = AiClient(settings.serverUrl ?: "", settings.apiKey, kind = settings.serverKind)
         val model = settings.modelId ?: "default"
         job = viewModelScope.launch {
             try {

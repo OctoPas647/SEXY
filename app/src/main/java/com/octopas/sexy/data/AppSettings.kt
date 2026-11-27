@@ -10,6 +10,11 @@ class AppSettings(context: Context) {
         get() = prefs.getString("server_url", null)
         set(v) = prefs.edit().putString("server_url", v).apply()
 
+    /** Which kind of server answered last (LM Studio, Ollama, ...), so chat uses the right API path. */
+    var serverKind: ServerKind?
+        get() = ServerKind.fromName(prefs.getString("server_kind", null))
+        set(v) = prefs.edit().putString("server_kind", v?.name).apply()
+
     var apiKey: String?
         get() = secure.get("api_key")
         set(v) = secure.put("api_key", v)
@@ -41,6 +46,7 @@ class AppSettings(context: Context) {
 
     fun disconnectServer() {
         serverUrl = null
+        serverKind = null
         apiKey = null
         modelId = null
     }

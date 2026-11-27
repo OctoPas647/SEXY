@@ -12,6 +12,7 @@ import com.octopas.sexy.data.AiModel
 import com.octopas.sexy.data.GitHubException
 import com.octopas.sexy.data.ModelList
 import com.octopas.sexy.data.ServerDiscovery
+import com.octopas.sexy.data.ServerKind
 import com.octopas.sexy.data.ServerUrl
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,7 +34,7 @@ sealed interface ServerStatus {
 }
 
 /**
- * Connection to LM Studio on the PC. Finds it by itself: when the app opens, when Tailscale
+ * Connection to the AI server on the PC (LM Studio, Ollama, llama.cpp, ...). Finds it by itself: when the app opens, when Tailscale
  * turns on, and when you come back to the app. Manual entry is only a fallback.
  */
 class AppViewModel @JvmOverloads constructor(
@@ -52,6 +53,9 @@ class AppViewModel @JvmOverloads constructor(
     var model by mutableStateOf(settings.modelId ?: "")
         private set
     var models by mutableStateOf<List<AiModel>>(emptyList())
+        private set
+    /** Which server answered (LM Studio, Ollama, ...). */
+    var serverKind by mutableStateOf(settings.serverKind)
         private set
     var connecting by mutableStateOf(false)
         private set
@@ -87,7 +91,7 @@ class AppViewModel @JvmOverloads constructor(
         }
     }
 
-    fun client(): AiClient = AiClient(settings.serverUrl ?: "", settings.apiKey)
+    fun client(): AiClient = AiClient(settings.serverUrl ?: "", settings.apiKey, kind = settings.serverKind)
 
     /** Looks for the PC everywhere it could be and connects to the first place that answers. */
     fun findServer() {
@@ -98,11 +102,11 @@ class AppViewModel @JvmOverloads constructor(
             connectError = null
             val candidates = ServerDiscovery.candidates(settings.serverUrl, settings.extraHosts)
             when (val r = ServerDiscovery.find(candidates, settings.apiKey)) {
-                is ServerDiscovery.Result.Success -> useServer(r.found.url, r.found.models, settings.apiKey)
+                is ServerDiscovery.Result.Success -> useServer(r.found.url, r.found.models, settings.apiKey, r.found.kind)
                 is ServerDiscovery.Result.Failed -> {
                     val reason = r.refused?.let { friendlyError(it.error) }
                         ?: if (!tailscaleOn) "Tailscale is off on this phone. Turn it on and SEXY connects by itself."
-                        else "Couldn't find LM Studio on your PC. Is the PC on, and is LM Studio's server running?"
+                        else "Couldn't find an AI server on your PC. Is the PC on, and is LM Studio's (or Ollama's...) server running?"
                     status = if (r.refused == null && !tailscaleOn) ServerStatus.NoTailscale else ServerStatus.Offline(reason)
                     connectError = reason
                 }
@@ -130,18 +134,20 @@ class AppViewModel @JvmOverloads constructor(
                     if (host.isNotBlank() && host !in ServerDiscovery.DEFAULT_HOSTS && host !in settings.extraHosts) {
                         settings.extraHosts = settings.extraHosts + host
                     }
-                    useServer(r.found.url, r.found.models, key)
+                    useServer(r.found.url, r.found.models, key, r.found.kind)
                 }
                 is ServerDiscovery.Result.Failed -> connectError = r.refused?.let { "${friendlyError(it.error)}\n(at ${it.url})" }
                     ?: ("Nothing answered at:\n" + r.tried.joinToString("\n") { "• $it" } +
-                        "\n\nCheck that Tailscale is on here and on the PC, and that LM Studio's server is running.")
+                        "\n\nCheck that Tailscale is on here and on the PC, and that the AI server (LM Studio, Ollama, ...) is running.")
             }
             connecting = false
         }
     }
 
-    private fun useServer(url: String, found: List<AiModel>, key: String?) {
+    private fun useServer(url: String, found: List<AiModel>, key: String?, kind: ServerKind) {
         settings.serverUrl = url
+        settings.serverKind = kind
+        serverKind = kind
         settings.apiKey = key
         models = found
         val pick = ModelList.choose(found, settings.modelId)
@@ -149,7 +155,7 @@ class AppViewModel @JvmOverloads constructor(
         serverUrl = url
         model = settings.modelId ?: ""
         status = if (found.isEmpty()) {
-            ServerStatus.Offline("LM Studio is running but has no chat models. Download one in LM Studio.")
+            ServerStatus.Offline("${kind.label} is running but has no chat models. Download one in ${kind.label}.")
         } else ServerStatus.Online
         lastOnlineAt = System.currentTimeMillis()
         connected = true
@@ -168,8 +174,8 @@ class AppViewModel @JvmOverloads constructor(
         search = viewModelScope.launch {
             status = ServerStatus.Checking
             try {
-                val found = client().models()
-                useServer(settings.serverUrl ?: "", found, settings.apiKey)
+                val info = client().detect()
+                useServer(settings.serverUrl ?: "", info.models, settings.apiKey, info.kind)
             } catch (e: Exception) {
                 search = null
                 findServer()
@@ -194,6 +200,7 @@ class AppViewModel @JvmOverloads constructor(
         search?.cancel()
         settings.disconnectServer()
         connected = false
+        serverKind = null
         models = emptyList()
         connecting = false
         val hint = "Type the other PC's Tailscale name below, or search again."
@@ -206,7 +213,7 @@ fun friendlyError(e: Throwable): String = when (e) {
     is AiException -> e.message ?: "AI server error"
     is GitHubException -> e.message ?: "GitHub error"
     is UnknownHostException -> "Can't find your PC. Is Tailscale turned on on this phone?"
-    is ConnectException -> "Can't connect. Is the PC on, Tailscale connected, and LM Studio's server running?"
+    is ConnectException -> "Can't connect. Is the PC on, Tailscale connected, and the AI server (LM Studio, Ollama, ...) running?"
     is SocketTimeoutException -> "No answer in time. Is the PC on and connected to Tailscale?"
     is NoRouteToHostException -> "Can't reach the PC. Check that Tailscale is connected on both devices."
     is SSLException -> "Secure-connection problem. Use http:// - Tailscale already encrypts the connection."

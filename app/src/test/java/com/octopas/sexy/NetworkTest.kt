@@ -4,6 +4,7 @@ import com.octopas.sexy.data.AiClient
 import com.octopas.sexy.data.AiException
 import com.octopas.sexy.data.AiModel
 import com.octopas.sexy.data.ServerDiscovery
+import com.octopas.sexy.data.ServerKind
 import com.octopas.sexy.data.ChatMsg
 import com.octopas.sexy.data.FileEdit
 import com.octopas.sexy.data.GitHubClient
@@ -30,39 +31,100 @@ class AiClientTest {
     private fun client(key: String? = "secret", clock: () -> Long = System::nanoTime) =
         AiClient(server.url("/").toString().trimEnd('/'), key, clock = clock)
 
+    /** Answers like a given kind of server; every other path is a 404, like the real thing. */
+    private fun serve(routes: Map<String, String>) {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                routes[request.path]?.let { MockResponse().setBody(it) } ?: MockResponse().setResponseCode(404)
+        }
+    }
+
     @Test fun llamaServerModelsWithBearerKey() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(404)) // no LM Studio API -> falls back to /v1/models
-        server.enqueue(MockResponse().setBody("""{"object":"list","data":[{"id":"qwen3.6-35b","object":"model"}]}"""))
-        assertEquals(listOf("qwen3.6-35b"), client().listModels())
-        assertEquals("/api/v0/models", server.takeRequest().path)
-        val req = server.takeRequest()
-        assertEquals("/v1/models", req.path)
-        assertEquals("Bearer secret", req.getHeader("Authorization"))
+        serve(mapOf("/v1/models" to """{"object":"list","models":[{"name":"qwen3.6-35b","model":"qwen3.6-35b"}],"data":[{"id":"qwen3.6-35b","object":"model","owned_by":"llamacpp"}]}"""))
+        val info = client().detect()
+        assertEquals(ServerKind.LLAMA_CPP, info.kind)
+        assertEquals(listOf("qwen3.6-35b"), info.models.map { it.id })
+        val paths = generateSequence { server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS) }.toList()
+        assertTrue(paths.all { it.getHeader("Authorization") == "Bearer secret" })
+        assertTrue(paths.any { it.path == "/v1/models" })
     }
 
     @Test fun lmStudioModelsLoadedFirstWithoutEmbeddings() = runBlocking {
-        server.enqueue(
-            MockResponse().setBody(
-                """{"object":"list","data":[
+        serve(
+            mapOf(
+                "/api/v0/models" to """{"object":"list","data":[
                   {"id":"text-embedding-nomic-embed-text-v1.5","type":"embeddings","state":"not-loaded"},
                   {"id":"qwen3.6-35b-a3b","type":"llm","state":"not-loaded"},
                   {"id":"gpt-oss-20b","type":"llm","state":"loaded"}]}"""
             )
         )
-        assertEquals(listOf(AiModel("gpt-oss-20b", true), AiModel("qwen3.6-35b-a3b")), client(key = null).models())
-        val req = server.takeRequest()
-        assertEquals("/api/v0/models", req.path)
-        assertEquals(null, req.getHeader("Authorization"))
+        val info = client(key = null).detect()
+        assertEquals(ServerKind.LM_STUDIO, info.kind)
+        assertEquals(listOf(AiModel("gpt-oss-20b", true), AiModel("qwen3.6-35b-a3b")), info.models)
+        assertEquals(null, server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test fun ollamaWithLoadedModel() = runBlocking {
+        serve(
+            mapOf(
+                "/api/tags" to """{"models":[
+                  {"name":"llama3.2:3b","model":"llama3.2:3b","digest":"a","details":{"family":"llama"}},
+                  {"name":"nomic-embed-text:latest","model":"nomic-embed-text:latest","digest":"b","details":{"family":"nomic-bert"}},
+                  {"name":"qwen3:14b","model":"qwen3:14b","digest":"c","details":{"family":"qwen3"}}]}""",
+                "/api/ps" to """{"models":[{"name":"qwen3:14b","model":"qwen3:14b"}]}""",
+                "/api/version" to """{"version":"0.12.3"}""",
+            )
+        )
+        val info = client(key = null).detect()
+        assertEquals(ServerKind.OLLAMA, info.kind)
+        assertEquals(listOf(AiModel("qwen3:14b", true), AiModel("llama3.2:3b")), info.models)
+    }
+
+    @Test fun ollamaLookalikeWithoutVersionIsNotOllama() = runBlocking {
+        // llama.cpp's server copies /api/tags, but it isn't Ollama.
+        serve(
+            mapOf(
+                "/api/tags" to """{"models":[{"name":"m","model":"m","digest":"x","details":{}}]}""",
+                "/v1/models" to """{"data":[{"id":"m","owned_by":"llamacpp"}]}""",
+            )
+        )
+        assertEquals(ServerKind.LLAMA_CPP, client(key = null).detect().kind)
+    }
+
+    @Test fun otherServersByOwner() = runBlocking {
+        for ((owner, kind) in listOf("vllm" to ServerKind.VLLM, "koboldcpp" to ServerKind.KOBOLDCPP, "someone" to ServerKind.OPENAI_COMPATIBLE)) {
+            serve(mapOf("/v1/models" to """{"data":[{"id":"m1","owned_by":"$owner"}]}"""))
+            assertEquals(kind, client(key = null).detect().kind)
+        }
+    }
+
+    @Test fun openWebUiUsesItsOwnApiPath() = runBlocking {
+        serve(mapOf("/api/models" to """{"data":[{"id":"llama3","name":"Llama 3"}]}"""))
+        val info = client().detect()
+        assertEquals(ServerKind.OPEN_WEBUI, info.kind)
+        assertEquals("/api/chat/completions", info.kind.chatPath)
+        assertEquals(listOf("llama3"), info.models.map { it.id })
+    }
+
+    @Test fun webPageIsNotAnAiServer() = runBlocking {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setBody("<html>hello</html>")
+        }
+        try { client().detect(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("isn't an AI server")) }
     }
 
     @Test fun wrongKeyGivesFriendlyMessage() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"Invalid API Key"}}"""))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) =
+                MockResponse().setResponseCode(401).setBody("""{"error":{"message":"Invalid API Key"}}""")
+        }
         try { client("bad").listModels(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("API key")) }
     }
 
     @Test fun serverDownBehindTailscaleServe() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(502))
-        server.enqueue(MockResponse().setResponseCode(502))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(502)
+        }
         try { client().listModels(); fail() } catch (e: AiException) { assertTrue(e.message!!.contains("isn't running")) }
     }
 
@@ -135,6 +197,23 @@ class DiscoveryTest {
         val found = (r as ServerDiscovery.Result.Success).found
         assertEquals(good, found.url)
         assertEquals(listOf(AiModel("qwen3.6-35b-a3b", loaded = true)), found.models)
+    }
+
+    @Test fun prefersEarlierAddressWhenBothAnswer() = runBlocking {
+        val other = MockWebServer()
+        other.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = when (request.path) {
+                "/v1/models" -> MockResponse().setBody("""{"data":[{"id":"x","owned_by":"vllm"}]}""")
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        other.start()
+        val lmStudio = server.url("/").toString().trimEnd('/')
+        val vllm = other.url("/").toString().trimEnd('/')
+        // LM Studio is listed first, so it wins even if vLLM happens to answer sooner.
+        val r = ServerDiscovery.find(listOf(lmStudio, vllm), apiKey = null)
+        assertEquals(ServerKind.LM_STUDIO, (r as ServerDiscovery.Result.Success).found.kind)
+        other.shutdown()
     }
 
     @Test fun nothingAnswering() = runBlocking {

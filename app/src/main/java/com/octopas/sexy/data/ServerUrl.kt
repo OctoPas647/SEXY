@@ -7,8 +7,12 @@ object ServerUrl {
     /** LM Studio's server port. */
     const val DEFAULT_PORT = 1234
 
-    /** Port LM Studio's server uses. (The old llama-server on 3030 is no longer used.) */
-    val KNOWN_PORTS = listOf(1234)
+    /**
+     * Default ports of the popular AI servers, most popular first: LM Studio 1234, Ollama 11434,
+     * llama.cpp 8080, vLLM 8000, Jan 1337, KoboldCpp 5001, text-generation-webui 5000, GPT4All 4891,
+     * Open WebUI 3000. (The old llama-server on 3030 is no longer used.)
+     */
+    val KNOWN_PORTS: List<Int> = ServerKind.allPorts
 
     /** Old llama-server addresses (port 3030) saved by earlier versions are ignored. */
     fun isRetired(url: String?): Boolean = url != null && Regex(":3030(/|$)").containsMatchIn(url)
@@ -34,7 +38,7 @@ object ServerUrl {
     /**
      * Addresses to try, in order, for what the user typed. With no scheme and no port the server
      * could be shared in several ways, so all of them are tried:
-     *  1. http://name:1234  - LM Studio (shared with `tailscale serve --http=1234` or "serve on local network")
+     *  1. http://name:<port> - each popular AI server's default port, LM Studio's 1234 first
      *  2. https://name      - plain `tailscale serve` (HTTPS on port 443, needs the full *.ts.net name)
      *  3. http://name       - `tailscale serve --http=80`
      * A typed scheme or port is taken literally.
