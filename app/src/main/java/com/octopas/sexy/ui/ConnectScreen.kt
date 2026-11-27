@@ -123,7 +123,7 @@ fun ConnectScreen(vm: AppViewModel) {
                             Spacer(Modifier.height(14.dp))
                             Text("Looking for your PC…", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "Checking LM Studio, Ollama, llama.cpp and more on your Tailscale network",
+                                "Checking llama.cpp, LM Studio, Ollama and more on this phone (USB), your Wi-Fi and Tailscale",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -133,7 +133,7 @@ fun ConnectScreen(vm: AppViewModel) {
                             Spacer(Modifier.height(10.dp))
                             Text("Turn on Tailscale", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "SEXY connects to your PC by itself as soon as Tailscale is on.",
+                                "Your PC isn't on this Wi-Fi or connected over USB. SEXY connects by itself as soon as Tailscale is on.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -178,9 +178,9 @@ fun ConnectScreen(vm: AppViewModel) {
                         onValueChange = { address = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("PC address") },
-                        placeholder = { Text("desktop-d0efhda or 100.x.x.x") },
+                        placeholder = { Text("desktop-g55e6ne, 192.168.x.x:9931 or 127.0.0.1:9931") },
                         leadingIcon = { Icon(Icons.Outlined.Dns, null) },
-                        supportingText = { Text("Tailscale name or IP. Popular AI servers' ports are tried unless you type one.") },
+                        supportingText = { Text("Tailscale name, Wi-Fi IP, or 127.0.0.1 with adb reverse. Popular AI servers' ports (and 9931) are tried unless you type one.") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                     )
@@ -214,7 +214,7 @@ fun ConnectScreen(vm: AppViewModel) {
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "On the PC: any AI server - LM Studio (D:\\AI\\LMStudio\\SEXY-LMSTUDIO.bat sets it up), Ollama, llama.cpp, vLLM, Jan, KoboldCpp, Open WebUI...",
+                    "On the PC: any AI server - LM Studio (D:\\AI\\LMStudio\\SEXY-LMSTUDIO.bat sets it up), llama.cpp (SEXY-LAPTOP.bat shares it on Wi-Fi, Tailscale and USB), Ollama, vLLM, Jan, KoboldCpp, Open WebUI...",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,

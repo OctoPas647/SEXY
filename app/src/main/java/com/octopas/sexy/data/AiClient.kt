@@ -40,7 +40,7 @@ data class AiModel(val id: String, val loaded: Boolean = false)
 enum class ServerKind(val label: String, val chatPath: String, val ports: List<Int>) {
     LM_STUDIO("LM Studio", "/v1/chat/completions", listOf(1234)),
     OLLAMA("Ollama", "/v1/chat/completions", listOf(11434)),
-    LLAMA_CPP("llama.cpp", "/v1/chat/completions", listOf(8080)),
+    LLAMA_CPP("llama.cpp", "/v1/chat/completions", listOf(8080, 9931)),
     VLLM("vLLM", "/v1/chat/completions", listOf(8000)),
     JAN("Jan", "/v1/chat/completions", listOf(1337)),
     KOBOLDCPP("KoboldCpp", "/v1/chat/completions", listOf(5001)),

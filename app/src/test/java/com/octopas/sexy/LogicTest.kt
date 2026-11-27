@@ -2,6 +2,7 @@ package com.octopas.sexy
 
 import com.octopas.sexy.data.DiffType
 import com.octopas.sexy.data.EditParser
+import com.octopas.sexy.data.LanScanner
 import com.octopas.sexy.data.LineDiff
 import com.octopas.sexy.data.ServerUrl
 import com.octopas.sexy.data.SseParser
@@ -58,22 +59,43 @@ class ServerUrlTest {
 }
 
 class DiscoveryCandidatesTest {
-    @Test fun savedFirstThenEveryHostOnEveryPort() {
-        val c = ServerDiscovery.candidates("http://10.0.0.5:1234", listOf("laptop"))
+    @Test fun savedFirstThenPhoneThenWifiThenEveryHostOnEveryPort() {
+        val c = ServerDiscovery.candidates("http://10.0.0.5:1234", listOf("laptop"), listOf("http://192.168.1.40:9931"))
         val expected = listOf("http://10.0.0.5:1234") +
-            listOf("laptop", "desktop-d0efhda", "100.114.168.92").flatMap { h -> ServerUrl.KNOWN_PORTS.map { "http://$h:$it" } }
+            ServerUrl.KNOWN_PORTS.map { "http://127.0.0.1:$it" } +
+            listOf("http://192.168.1.40:9931") +
+            listOf("laptop", "desktop-d0efhda", "100.114.168.92", "desktop-g55e6ne").flatMap { h -> ServerUrl.KNOWN_PORTS.map { "http://$h:$it" } }
         assertEquals(expected, c)
+    }
+    @Test fun laptopLlamaServerPortIsTried() {
+        val c = ServerDiscovery.candidates(null, emptyList())
+        assertTrue(c.contains("http://127.0.0.1:9931")) // adb reverse tcp:9931 tcp:9931
+        assertTrue(c.contains("http://desktop-g55e6ne:9931")) // laptop over Tailscale
     }
     @Test fun oldLlamaServerAddressIsIgnored() {
         val c = ServerDiscovery.candidates("http://desktop-d0efhda:3030", emptyList())
         assertTrue(c.none { it.endsWith(":3030") })
-        assertEquals("http://desktop-d0efhda:1234", c.first())
+        assertEquals("http://127.0.0.1:1234", c.first())
     }
     @Test fun noDuplicatesAndTypedPortKept() {
         val c = ServerDiscovery.candidates("http://desktop-d0efhda:1234", listOf("pc:8080", " "))
         assertEquals(c.distinct(), c)
         assertEquals("http://desktop-d0efhda:1234", c.first())
         assertTrue(c.contains("http://pc:8080"))
+    }
+}
+
+class LanScannerTest {
+    @Test fun neighboursAreTheRestOfTheSlash24() {
+        val n = LanScanner.neighbours("192.168.1.23")
+        assertEquals(253, n.size)
+        assertEquals("192.168.1.1", n.first())
+        assertEquals("192.168.1.254", n.last())
+        assertTrue("192.168.1.23" !in n)
+    }
+    @Test fun garbageGivesNothing() {
+        assertTrue(LanScanner.neighbours("not-an-ip").isEmpty())
+        assertTrue(LanScanner.neighbours("300.1.1.1").isEmpty())
     }
 }
 

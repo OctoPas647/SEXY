@@ -1,6 +1,6 @@
 # SEXY
 
-LM Studio in your pocket. An Android app with an iOS 26 **Liquid Glass** look for talking to **your own AI** on your PC over Tailscale. Turn Tailscale on and the app finds your PC by itself.
+LM Studio in your pocket. An Android app with an iOS 26 **Liquid Glass** look for talking to **your own AI** on your PC over Tailscale, your Wi-Fi or USB. The app finds your PC by itself.
 
 - **Chats live on your PC, in LM Studio's own chat folder.** A chat you start on the phone shows up in LM Studio on the PC and the other way round. The phone keeps no copy unless you turn on *Keep a copy on this phone*. If the PC is offline, new chats wait and are sent when it's back; if a chat changed on both sides, the app merges them (or keeps both).
 - **Everything LM Studio has:** pick any model, load/eject it with its settings (context length, Flash Attention, KV cache on GPU, experts, batch size), download new models, per-chat system prompt and sampling (temperature, top-p, top-k, min-p, repeat penalty, max tokens, seed), thinking levels, images for vision models, file attachments (stored on the PC; text, code, PDF and Office files are read and given to the model), your LM Studio **plugins / MCP tools**, regenerate, edit and resend, and every answer version.
@@ -23,6 +23,18 @@ LM Studio in your pocket. An Android app with an iOS 26 **Liquid Glass** look fo
 3. On the phone, install the APK and turn on Tailscale. SEXY looks for `desktop-d0efhda` (and its Tailscale IP) on every popular AI server port and connects to what answers, LM Studio first.
 4. Another PC? Tap **Enter address manually** and type its Tailscale name. An API key is only needed if you turn on API tokens in LM Studio (or for Open WebUI).
 5. For GitHub, create a fine-grained token in the app's **GitHub** tab with Contents and Pull requests set to *Read and write* on the repos you pick.
+
+### The laptop (llama.cpp on port 9931)
+
+`127.0.0.1` on a phone is the phone itself, so the laptop (`desktop-g55e6ne`) shares its llama-server (`http://127.0.0.1:9931`) three ways. Copy the files from `pc/laptop/` into one folder on the laptop (e.g. `D:\AI\SEXY`) and double-click **`SEXY-LAPTOP.bat`** once (it asks for admin):
+
+| Way | Address in SEXY | How |
+|---|---|---|
+| Same Wi-Fi | `http://<laptop Wi-Fi IP>:9931` | Windows port proxy to 127.0.0.1:9931 + a firewall rule for your Wi-Fi and Tailscale only. Re-pointed after every reboot / Wi-Fi change by the task *SEXY laptop share*. |
+| Tailscale | `http://desktop-g55e6ne:9931` | `tailscale serve --http=9931` |
+| USB or wireless debugging | `http://127.0.0.1:9931` | `adb reverse tcp:9931 tcp:9931`, kept on every connected phone by the task *SEXY adb reverse*. Run **`SEXY-PAIR-PHONE.bat`** once per phone for wireless. |
+
+SEXY finds the laptop by itself in all three ways: it tries `127.0.0.1`, scans your Wi-Fi for ports 9931 / 1234 / 11434 / 8080 and tries `desktop-g55e6ne` over Tailscale, all at once. `SEXY-STATUS.bat` prints the addresses and tests them; `sexy-laptop.ps1 -Uninstall` removes everything. llama.cpp has no LM Studio chat folder, so chats with it are saved on the phone.
 
 ### The PC bridge (`pc/sexy-bridge.ps1`)
 
