@@ -35,7 +35,8 @@ object ServerDiscovery {
             urls.filter { it.startsWith("http://") && !it.endsWith(":80") && it.count { c -> c == ':' } == 2 }
                 .ifEmpty { urls.take(1) }
         }
-        return (listOfNotNull(saved?.takeIf { it.isNotBlank() }) + fromHosts).distinct()
+        val last = saved?.takeIf { it.isNotBlank() && !ServerUrl.isRetired(it) }
+        return (listOfNotNull(last) + fromHosts).distinct()
     }
 
     /** Short timeouts: a PC that's off or a wrong port should fail fast. */

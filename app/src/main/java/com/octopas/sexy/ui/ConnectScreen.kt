@@ -180,7 +180,7 @@ fun ConnectScreen(vm: AppViewModel) {
                         label = { Text("PC address") },
                         placeholder = { Text("desktop-d0efhda or 100.x.x.x") },
                         leadingIcon = { Icon(Icons.Outlined.Dns, null) },
-                        supportingText = { Text("Tailscale name or IP. Ports 1234 (LM Studio) and 3030 are tried.") },
+                        supportingText = { Text("Tailscale name or IP. LM Studio's port 1234 is used unless you type another.") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                     )

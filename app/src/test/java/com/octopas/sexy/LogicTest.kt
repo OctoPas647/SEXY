@@ -34,9 +34,9 @@ class ServerUrlTest {
     @Test fun schemeWithoutPortKeepsDefaultSchemePort() {
         assertEquals("https://pc.tail1234.ts.net", ServerUrl.normalize("https://pc.tail1234.ts.net"))
     }
-    @Test fun bareNameTriesLmStudioThenOldServerThenTailscaleServe() {
+    @Test fun bareNameTriesLmStudioThenTailscaleServe() {
         assertEquals(
-            listOf("http://desktop-d0efhda:1234", "http://desktop-d0efhda:3030", "https://desktop-d0efhda", "http://desktop-d0efhda"),
+            listOf("http://desktop-d0efhda:1234", "https://desktop-d0efhda", "http://desktop-d0efhda"),
             ServerUrl.candidates("desktop-d0efhda"),
         )
     }
@@ -56,12 +56,17 @@ class DiscoveryCandidatesTest {
         assertEquals(
             listOf(
                 "http://10.0.0.5:1234",
-                "http://laptop:1234", "http://laptop:3030",
-                "http://desktop-d0efhda:1234", "http://desktop-d0efhda:3030",
-                "http://100.114.168.92:1234", "http://100.114.168.92:3030",
+                "http://laptop:1234",
+                "http://desktop-d0efhda:1234",
+                "http://100.114.168.92:1234",
             ),
             ServerDiscovery.candidates("http://10.0.0.5:1234", listOf("laptop")),
         )
+    }
+    @Test fun oldLlamaServerAddressIsIgnored() {
+        val c = ServerDiscovery.candidates("http://desktop-d0efhda:3030", emptyList())
+        assertTrue(c.none { it.endsWith(":3030") })
+        assertEquals("http://desktop-d0efhda:1234", c.first())
     }
     @Test fun noDuplicatesAndTypedPortKept() {
         val c = ServerDiscovery.candidates("http://desktop-d0efhda:1234", listOf("pc:8080", " "))

@@ -11,8 +11,8 @@ Android app for talking to **your own AI** running on your PC in **LM Studio**, 
 
 ## Setup
 
-1. On the PC, run `D:\AI\tools\SEXY-SERVER-SETUP.bat` once. It starts LM Studio's server on `127.0.0.1:1234`, shares it with your tailnet using `tailscale serve --http=1234` (no firewall port is opened), and starts the server at every login.
-2. On the phone, install the APK and turn on Tailscale. SEXY looks for `desktop-d0efhda` and its Tailscale IP on ports 1234 (LM Studio) and 3030 (old llama-server) and connects to whatever answers. It searches again whenever Tailscale turns on or you come back to the app.
+1. On the PC, run `D:\AI\LMStudio\SEXY-LMSTUDIO.bat` once. It stops the old llama-server (port 3030), starts LM Studio's server on `127.0.0.1:1234`, shares it with your tailnet using `tailscale serve --http=1234` (no firewall port is opened), and starts the server at every login.
+2. On the phone, install the APK and turn on Tailscale. SEXY looks for `desktop-d0efhda` and its Tailscale IP on port 1234 (LM Studio) and connects. The old llama-server on 3030 is no longer used. It searches again whenever Tailscale turns on or you come back to the app.
 3. Another PC? Tap **Enter address manually** and type its Tailscale name; it's remembered for automatic search. An API key is only needed if you turn on API tokens in LM Studio.
 4. For GitHub, create a fine-grained token in the app's **GitHub** tab with Contents and Pull requests set to *Read and write* on the repos you pick.
 

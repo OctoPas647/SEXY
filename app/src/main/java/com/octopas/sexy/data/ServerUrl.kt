@@ -7,8 +7,11 @@ object ServerUrl {
     /** LM Studio's server port. */
     const val DEFAULT_PORT = 1234
 
-    /** Ports a server on the PC may use: LM Studio first, then the old llama-server setup. */
-    val KNOWN_PORTS = listOf(1234, 3030)
+    /** Port LM Studio's server uses. (The old llama-server on 3030 is no longer used.) */
+    val KNOWN_PORTS = listOf(1234)
+
+    /** Old llama-server addresses (port 3030) saved by earlier versions are ignored. */
+    fun isRetired(url: String?): Boolean = url != null && Regex(":3030(/|$)").containsMatchIn(url)
 
     private val schemeOnly = Regex("^https?:?/*$", RegexOption.IGNORE_CASE)
     private val explicitPort = Regex("^https?://(\\[[^\\]]+]|[^/:]+):\\d+", RegexOption.IGNORE_CASE)
@@ -32,9 +35,8 @@ object ServerUrl {
      * Addresses to try, in order, for what the user typed. With no scheme and no port the server
      * could be shared in several ways, so all of them are tried:
      *  1. http://name:1234  - LM Studio (shared with `tailscale serve --http=1234` or "serve on local network")
-     *  2. http://name:3030  - the old llama-server setup
-     *  3. https://name      - plain `tailscale serve` (HTTPS on port 443, needs the full *.ts.net name)
-     *  4. http://name       - `tailscale serve --http=80`
+     *  2. https://name      - plain `tailscale serve` (HTTPS on port 443, needs the full *.ts.net name)
+     *  3. http://name       - `tailscale serve --http=80`
      * A typed scheme or port is taken literally.
      */
     fun candidates(input: String): List<String> {
