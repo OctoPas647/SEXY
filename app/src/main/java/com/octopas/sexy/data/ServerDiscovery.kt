@@ -10,14 +10,23 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * Finds the AI server on your tailnet without typing anything: tries every known PC name /
- * Tailscale IP on the default port of every popular AI server (LM Studio, Ollama, llama.cpp,
+ * Finds the AI server without typing anything: tries the phone itself (adb reverse), servers
+ * found on the Wi-Fi ([LanScanner]) and every known PC name / Tailscale IP on the default port of every popular AI server (LM Studio, Ollama, llama.cpp,
  * vLLM, Jan, KoboldCpp, text-generation-webui, GPT4All, Open WebUI) at the same time.
  * When several answer, the last-used address wins, then the more popular server.
  */
 object ServerDiscovery {
-    /** Your PC: its Tailscale (MagicDNS) name and its Tailscale IP, in case MagicDNS is off on the phone. */
-    val DEFAULT_HOSTS = listOf("desktop-d0efhda", "100.114.168.92")
+    /**
+     * Your PC (its Tailscale MagicDNS name and Tailscale IP, in case MagicDNS is off on the phone),
+     * then your laptop (desktop-g55e6ne, llama.cpp on port 9931).
+     */
+    val DEFAULT_HOSTS = listOf("desktop-d0efhda", "100.114.168.92", "desktop-g55e6ne")
+
+    /**
+     * The phone itself. Answers when a PC forwards its server to the phone with
+     * `adb reverse tcp:9931 tcp:9931` (USB or wireless debugging), so http://127.0.0.1:9931 works.
+     */
+    const val LOOPBACK = "127.0.0.1"
 
     data class Found(val url: String, val models: List<AiModel>, val kind: ServerKind = ServerKind.OPENAI_COMPATIBLE)
 
@@ -29,9 +38,12 @@ object ServerDiscovery {
         data class Failed(val refused: Refused?, val tried: List<String>) : Result
     }
 
-    /** Every address to try: the last one that worked first, then each host on each port. */
-    fun candidates(saved: String?, extraHosts: List<String> = emptyList()): List<String> {
-        val hosts = (extraHosts + DEFAULT_HOSTS).map { it.trim() }.filter { it.isNotEmpty() }
+    /**
+     * Every address to try: the last one that worked first, then the phone itself (adb reverse),
+     * then servers found on the Wi-Fi ([lanHits]), then each known host on each port.
+     */
+    fun candidates(saved: String?, extraHosts: List<String> = emptyList(), lanHits: List<String> = emptyList()): List<String> {
+        val hosts = (listOf(LOOPBACK) + extraHosts + DEFAULT_HOSTS).map { it.trim() }.filter { it.isNotEmpty() }
         val fromHosts = hosts.flatMap { h ->
             val urls = ServerUrl.candidates(h)
             // Bare names expand to every port; keep http ones (https needs a full *.ts.net name).
@@ -39,7 +51,8 @@ object ServerDiscovery {
                 .ifEmpty { urls.take(1) }
         }
         val last = saved?.takeIf { it.isNotBlank() && !ServerUrl.isRetired(it) }
-        return (listOfNotNull(last) + fromHosts).distinct()
+        val loopback = fromHosts.filter { it.startsWith("http://$LOOPBACK:") }
+        return (listOfNotNull(last) + loopback + lanHits + (fromHosts - loopback.toSet())).distinct()
     }
 
     /** Short timeouts: a PC that's off or a wrong port should fail fast. */

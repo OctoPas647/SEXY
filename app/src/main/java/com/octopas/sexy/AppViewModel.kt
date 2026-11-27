@@ -11,12 +11,17 @@ import com.octopas.sexy.data.AiException
 import com.octopas.sexy.data.AiModel
 import com.octopas.sexy.data.BridgeClient
 import com.octopas.sexy.data.GitHubException
+import com.octopas.sexy.data.LanScanner
 import com.octopas.sexy.data.ModelList
 import com.octopas.sexy.data.ServerDiscovery
 import com.octopas.sexy.data.ServerKind
 import com.octopas.sexy.data.ServerUrl
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.net.ConnectException
@@ -29,14 +34,15 @@ sealed interface ServerStatus {
     /** Looking for the PC on the tailnet. */
     data object Checking : ServerStatus
     data object Online : ServerStatus
-    /** No VPN on this phone, so the PC can't be reached. */
+    /** Not found on Wi-Fi or USB, and no VPN on this phone, so the PC can't be reached. */
     data object NoTailscale : ServerStatus
     data class Offline(val reason: String) : ServerStatus
 }
 
 /**
  * Connection to the AI server on the PC (LM Studio, Ollama, llama.cpp, ...). Finds it by itself: when the app opens, when Tailscale
- * turns on, and when you come back to the app. Manual entry is only a fallback.
+ * turns on or off, and when you come back to the app. It looks in three places at once: the phone itself
+ * (127.0.0.1, forwarded with adb reverse), the Wi-Fi network, and Tailscale. Manual entry is only a fallback.
  */
 class AppViewModel @JvmOverloads constructor(
     app: Application,
@@ -94,7 +100,8 @@ class AppViewModel @JvmOverloads constructor(
                     delay(1500) // give the VPN a moment to set up its routes and DNS
                     findServer()
                 } else if (connected) {
-                    status = ServerStatus.NoTailscale
+                    // Maybe connected over Wi-Fi or USB, which still works: check, and search again if not.
+                    checkStatus()
                 }
             }
         }
@@ -109,13 +116,12 @@ class AppViewModel @JvmOverloads constructor(
             status = ServerStatus.Checking
             connecting = true
             connectError = null
-            val candidates = ServerDiscovery.candidates(settings.serverUrl, settings.extraHosts)
-            when (val r = ServerDiscovery.find(candidates, settings.apiKey)) {
+            when (val r = searchEverywhere()) {
                 is ServerDiscovery.Result.Success -> useServer(r.found.url, r.found.models, settings.apiKey, r.found.kind)
                 is ServerDiscovery.Result.Failed -> {
                     val reason = r.refused?.let { friendlyError(it.error) }
-                        ?: if (!tailscaleOn) "Tailscale is off on this phone. Turn it on and SEXY connects by itself."
-                        else "Couldn't find an AI server on your PC. Is the PC on, and is LM Studio's (or Ollama's...) server running?"
+                        ?: if (!tailscaleOn) "Not found on this Wi-Fi or over USB, and Tailscale is off. Turn Tailscale on and SEXY connects by itself."
+                        else "Couldn't find an AI server on your PC. Is the PC on, and is its AI server (llama.cpp, LM Studio, Ollama...) running?"
                     status = if (r.refused == null && !tailscaleOn) ServerStatus.NoTailscale else ServerStatus.Offline(reason)
                     connectError = reason
                 }
@@ -124,11 +130,38 @@ class AppViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Searches the known addresses (last one used, 127.0.0.1, Tailscale names) and the Wi-Fi network at
+     * the same time; whichever finds a server first wins.
+     */
+    private suspend fun searchEverywhere(): ServerDiscovery.Result = coroutineScope {
+        val named = ServerDiscovery.candidates(settings.serverUrl, settings.extraHosts)
+        val searches: MutableList<Deferred<ServerDiscovery.Result>> = mutableListOf(
+            async { ServerDiscovery.find(named, settings.apiKey) },
+            async {
+                val hits = LanScanner.scan(getApplication()).filter { it !in named }
+                if (hits.isEmpty()) ServerDiscovery.Result.Failed(null, emptyList())
+                else ServerDiscovery.find(hits, settings.apiKey)
+            },
+        )
+        val failures = mutableListOf<ServerDiscovery.Result.Failed>()
+        while (searches.isNotEmpty()) {
+            val (done, r) = select { searches.forEach { d -> d.onAwait { d to it } } }
+            searches -= done
+            if (r is ServerDiscovery.Result.Success) {
+                searches.forEach { it.cancel() }
+                return@coroutineScope r
+            }
+            failures += r as ServerDiscovery.Result.Failed
+        }
+        ServerDiscovery.Result.Failed(failures.firstNotNullOfOrNull { it.refused }, failures.flatMap { it.tried })
+    }
+
     /** Manual fallback: the address (and optional API key) the user typed. */
     fun connect(addressInput: String, keyInput: String) {
         val candidates = ServerUrl.candidates(addressInput)
         if (candidates.isEmpty()) {
-            connectError = "That doesn't look like an address. Example: desktop-d0efhda or 100.101.102.103"
+            connectError = "That doesn't look like an address. Example: desktop-d0efhda, 192.168.1.20:9931 or 127.0.0.1:9931"
             return
         }
         val key = keyInput.trim().ifBlank { null }
@@ -147,7 +180,8 @@ class AppViewModel @JvmOverloads constructor(
                 }
                 is ServerDiscovery.Result.Failed -> connectError = r.refused?.let { "${friendlyError(it.error)}\n(at ${it.url})" }
                     ?: ("Nothing answered at:\n" + r.tried.joinToString("\n") { "• $it" } +
-                        "\n\nCheck that Tailscale is on here and on the PC, and that the AI server (LM Studio, Ollama, ...) is running.")
+                        "\n\nCheck that the AI server (llama.cpp, LM Studio, Ollama, ...) is running and reachable: same Wi-Fi, " +
+                        "adb reverse for 127.0.0.1, or Tailscale on here and on the PC.")
             }
             connecting = false
         }
@@ -213,7 +247,7 @@ class AppViewModel @JvmOverloads constructor(
         serverKind = null
         models = emptyList()
         connecting = false
-        val hint = "Type the other PC's Tailscale name below, or search again."
+        val hint = "Type the other PC's address below (Tailscale name, Wi-Fi IP or 127.0.0.1:9931), or search again."
         status = ServerStatus.Offline(hint)
         connectError = hint
     }
@@ -223,9 +257,9 @@ fun friendlyError(e: Throwable): String = when (e) {
     is AiException -> e.message ?: "AI server error"
     is GitHubException -> e.message ?: "GitHub error"
     is UnknownHostException -> "Can't find your PC. Is Tailscale turned on on this phone?"
-    is ConnectException -> "Can't connect. Is the PC on, Tailscale connected, and the AI server (LM Studio, Ollama, ...) running?"
-    is SocketTimeoutException -> "No answer in time. Is the PC on and connected to Tailscale?"
-    is NoRouteToHostException -> "Can't reach the PC. Check that Tailscale is connected on both devices."
+    is ConnectException -> "Can't connect. Is the PC on, the AI server (llama.cpp, LM Studio, ...) running, and the PC reachable (same Wi-Fi, adb reverse or Tailscale)?"
+    is SocketTimeoutException -> "No answer in time. Is the PC on and on the same Wi-Fi or Tailscale?"
+    is NoRouteToHostException -> "Can't reach the PC. Check that it's on the same Wi-Fi, or that Tailscale is connected on both devices."
     is SSLException -> "Secure-connection problem. Use http:// - Tailscale already encrypts the connection."
     else -> e.message ?: e.toString()
 }

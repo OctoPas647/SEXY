@@ -121,6 +121,7 @@ fun SettingsScreen(app: AppViewModel, chat: ChatViewModel, models: ModelsViewMod
                             SyncState.PENDING, SyncState.SYNCING -> "${sexy.chats.pendingCount} chat(s) waiting for the PC."
                             SyncState.PC_OFFLINE -> "Your PC can't be reached."
                             SyncState.NO_BRIDGE -> "The bridge isn't running on the PC."
+                            SyncState.ON_PHONE -> "This server isn't LM Studio, so chats are saved on this phone."
                         },
                         icon = Icons.Outlined.CloudSync, iconColor = ios.green, divider = keepCopy,
                         onClick = { chat.syncNow(); note = "Syncing with your PC…" },

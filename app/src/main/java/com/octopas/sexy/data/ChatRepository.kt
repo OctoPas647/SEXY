@@ -10,7 +10,11 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /** Where the chat list came from, for the little status under "Chats". */
-enum class SyncState { SYNCED, SYNCING, PC_OFFLINE, NO_BRIDGE, PENDING }
+enum class SyncState {
+    SYNCED, SYNCING, PC_OFFLINE, NO_BRIDGE, PENDING,
+    /** The server isn't LM Studio (e.g. llama.cpp on the laptop): there's no chat folder to sync with, chats stay on the phone. */
+    ON_PHONE,
+}
 
 /**
  * Chats live on the PC, in LM Studio's own chat folder (through the bridge), so the phone and
@@ -33,13 +37,26 @@ class ChatRepository(context: Context, private val settings: AppSettings) {
 
     val pendingCount: Int get() = outbox.size
 
+    /**
+     * The bridge keeps chats in LM Studio's chat folder, so it only exists next to LM Studio. With any
+     * other server (llama.cpp on the laptop, Ollama, ...) and no bridge address set, chats are kept on the phone.
+     */
+    private fun phoneOnly(): Boolean {
+        val kind = settings.serverKind
+        return settings.bridgeUrl == null && kind != null && kind != ServerKind.LM_STUDIO
+    }
+
+    private fun keepLocal(): Boolean = settings.keepLocalCopy || phoneOnly()
+
     private fun bridge(): BridgeClient? =
-        (settings.bridgeUrl ?: BridgeClient.urlFor(settings.serverUrl))?.let { BridgeClient(it) }
+        if (phoneOnly()) null
+        else (settings.bridgeUrl ?: BridgeClient.urlFor(settings.serverUrl))?.let { BridgeClient(it) }
 
     // ---------- list / open ----------
 
     suspend fun list(): List<ChatSummary> = withContext(Dispatchers.IO) {
         val b = bridge()
+        if (phoneOnly()) _state.value = SyncState.ON_PHONE
         val remote = if (b == null) null else runCatching { b.list() }
             .onFailure { _state.value = if (it is BridgeException && it.code == 404) SyncState.NO_BRIDGE else SyncState.PC_OFFLINE }
             .getOrNull()
@@ -47,7 +64,7 @@ class ChatRepository(context: Context, private val settings: AppSettings) {
             flushOutbox(b!!)
             _state.value = if (outbox.isEmpty()) SyncState.SYNCED else SyncState.PENDING
         }
-        val local = if (settings.keepLocalCopy) localSummaries() else emptyList()
+        val local = if (keepLocal()) localSummaries() else emptyList()
         val pending = outbox.values.map { LmsFormat.summary(it) }
         merge(remote ?: emptyList(), local, pending)
     }
@@ -70,7 +87,7 @@ class ChatRepository(context: Context, private val settings: AppSettings) {
             return@withContext remote
         }
         readLocal(id) ?: throw BridgeException(
-            if (settings.keepLocalCopy) "This chat isn't on the phone and the PC can't be reached."
+            if (keepLocal()) "This chat isn't on the phone and the PC can't be reached."
             else "Can't reach your PC. Chats are only kept on the PC - turn on \"Keep a copy on this phone\" to read them offline."
         )
     }
@@ -89,8 +106,12 @@ class ChatRepository(context: Context, private val settings: AppSettings) {
     /** Saves to the PC (merging if needed). Returns the doc as stored (new updatedAt, maybe a new id). */
     suspend fun save(doc: ChatDoc): ChatDoc = mutex.withLock {
         withContext(Dispatchers.IO) {
-            if (settings.keepLocalCopy) writeLocal(doc)
+            if (keepLocal()) writeLocal(doc)
             val b = bridge()
+            if (b == null && phoneOnly()) {
+                _state.value = SyncState.ON_PHONE
+                return@withContext doc
+            }
             if (b == null) {
                 outbox[doc.id] = doc
                 _state.value = SyncState.NO_BRIDGE
@@ -177,8 +198,9 @@ class ChatRepository(context: Context, private val settings: AppSettings) {
     private fun localSummaries(): List<ChatSummary> = localDir.listFiles { f -> f.name.endsWith(".conversation.json") }.orEmpty()
         .mapNotNull { f -> readLocal(f.name.removeSuffix(".conversation.json").replace("__", "/"))?.let { LmsFormat.summary(it) } }
 
-    /** Turning the phone copy off removes it (the PC keeps everything). */
+    /** Turning the phone copy off removes it (the PC keeps everything). Not while the phone is the only place chats live. */
     fun deleteLocalCopy() {
+        if (phoneOnly()) return
         localDir.listFiles().orEmpty().forEach { it.delete() }
     }
 

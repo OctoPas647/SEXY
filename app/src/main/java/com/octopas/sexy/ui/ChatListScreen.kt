@@ -88,6 +88,7 @@ fun ChatListScreen(app: AppViewModel, chat: ChatViewModel) {
                         SyncState.PENDING -> "Waiting to save to your PC"
                         SyncState.PC_OFFLINE -> "Your PC is offline"
                         SyncState.NO_BRIDGE -> "Chat bridge not running on the PC"
+                        SyncState.ON_PHONE -> "Stored on this phone · ${app.serverKind?.label ?: "AI server"}"
                     },
                 )
             }
